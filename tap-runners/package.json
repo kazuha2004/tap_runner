@@ -1,0 +1,13 @@
+{
+  "name": "tap-runners",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=tap-runners-client",
+    "build": "npm run build --workspace=tap-runners-client",
+    "start": "npm run start --workspace=tap-runners-client"
+  }
+}
