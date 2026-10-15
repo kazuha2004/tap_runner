@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { TRACK_WIDTH } from "./constants";
+import { getSceneQuality } from "../quality";
 import {
   addDistanceSigns,
   addInstances,
@@ -76,6 +77,9 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
   }
   addInstances(root, new THREE.SphereGeometry(1, 8, 6), "#ffffff", snowbanks, { vertexColors: true });
 
+  const smokePositionsList = [];
+  const smokeQuality = getSceneQuality();
+  const smokePerChimney = Math.max(6, Math.floor(90 * smokeQuality.crowdScale));
   for (let index = 0; index < 8; index += 1) {
     const side = index % 2 ? 1 : -1;
     const row = Math.floor(index / 2);
@@ -86,28 +90,28 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
     addMesh(root, new THREE.BoxGeometry(3.3, 3.8, 0.24), "#77abc0", [x, 2.8, z + 4.62]);
     addMesh(root, new THREE.BoxGeometry(1.1, 2.4, 0.22), "#694936", [x - 3, 1.2, z + 4.7]);
     const chimney = addMesh(root, new THREE.CylinderGeometry(0.4, 0.45, 3.4, 6), "#756b69", [x + 3.6, 8.4, z - 2.1]);
-    const smokePositions = new Float32Array(90 * 3);
-    for (let particle = 0; particle < 90; particle += 1) {
-      smokePositions[particle * 3] = chimney.position.x + (Math.random() - 0.5) * 0.8;
-      smokePositions[particle * 3 + 1] = 10 + Math.random() * 5;
-      smokePositions[particle * 3 + 2] = chimney.position.z + (Math.random() - 0.5) * 0.8;
+    for (let particle = 0; particle < smokePerChimney; particle += 1) {
+      smokePositionsList.push(
+        chimney.position.x + (Math.random() - 0.5) * 0.8,
+        10 + Math.random() * 5,
+        chimney.position.z + (Math.random() - 0.5) * 0.8,
+      );
     }
-    const smokeGeometry = new THREE.BufferGeometry();
-    smokeGeometry.setAttribute("position", new THREE.BufferAttribute(smokePositions, 3));
-    const smoke = new THREE.Points(
-      smokeGeometry,
-      new THREE.PointsMaterial({ color: "#e7edf0", size: 0.55, transparent: true, opacity: 0.65 }),
-    );
-    root.add(smoke);
-    updates.push((time) => {
-      const attr = smokeGeometry.attributes.position;
-      for (let particle = 0; particle < attr.count; particle += 1) {
-        attr.setY(particle, 10 + ((attr.getY(particle) - 10 + 0.018) % 5));
-        attr.setX(particle, attr.getX(particle) + Math.sin(time + particle) * 0.001);
-      }
-      attr.needsUpdate = true;
-    });
   }
+  const smokeGeometry = new THREE.BufferGeometry();
+  smokeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(smokePositionsList, 3));
+  root.add(new THREE.Points(
+    smokeGeometry,
+    new THREE.PointsMaterial({ color: "#e7edf0", size: 0.55, transparent: true, opacity: 0.65 }),
+  ));
+  updates.push((time) => {
+    const attr = smokeGeometry.attributes.position;
+    for (let particle = 0; particle < attr.count; particle += 1) {
+      attr.setY(particle, 10 + ((attr.getY(particle) - 10 + 0.018) % 5));
+      attr.setX(particle, attr.getX(particle) + Math.sin(time + particle) * 0.001);
+    }
+    attr.needsUpdate = true;
+  });
 
   for (let index = 0; index < 8; index += 1) {
     const side = index % 2 ? 1 : -1;
@@ -144,6 +148,7 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
   lake.receiveShadow = true;
 
   const lift = new THREE.Group();
+  lift.userData.dynamic = true;
   const cableLength = trackLength * 0.9;
   for (const side of [-1, 1]) {
     addMesh(root, new THREE.CylinderGeometry(0.28, 0.38, 18, 7), "#766b61", [side * 35, 9, -cableLength / 2]);
@@ -201,7 +206,7 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
   });
   updates.push((time, progress) => animatePeople(time, progress > 0.8 ? 0.12 : 0.035));
 
-  const snowCount = 1200;
+  const snowCount = Math.max(120, Math.floor(1200 * getSceneQuality().crowdScale));
   const snowPositions = new Float32Array(snowCount * 3);
   for (let index = 0; index < snowCount; index += 1) {
     snowPositions[index * 3] = (Math.random() - 0.5) * 120;

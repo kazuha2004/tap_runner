@@ -135,6 +135,7 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
       0.75,
       -index * trackLength / 12,
     ]);
+    weed.userData.dynamic = true;
     tumbleweeds.push({ weed, baseX: weed.position.x, phase: index });
   }
   updates.push((time) => tumbleweeds.forEach(({ weed, baseX, phase }) => {
@@ -147,6 +148,7 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
     const bird = addMesh(root, new THREE.ConeGeometry(0.38, 1.2, 3), "#655b4e", [
       -52 + index * 17, 24 + index % 3 * 3, -index * trackLength / 7,
     ], { rotation: [0, 0, Math.PI / 2] });
+    bird.userData.dynamic = true;
     birds.push({
       bird,
       centerX: bird.position.x,

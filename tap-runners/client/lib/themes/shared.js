@@ -1,19 +1,33 @@
 import * as THREE from "three";
 import { LANE_COUNT, LANE_WIDTH, TRACK_WIDTH } from "./constants";
+import { getSceneQuality } from "../quality";
+
+const materialCache = new Map();
 
 export function material(color, options = {}) {
-  return new THREE.MeshToonMaterial({
+  const key = `${color}:${JSON.stringify(options)}`;
+  const cached = materialCache.get(key);
+  if (cached) return cached;
+  const created = new THREE.MeshToonMaterial({
     color,
     flatShading: true,
     ...options,
   });
+  materialCache.set(key, created);
+  return created;
+}
+
+export function clearThemeMaterialCache() {
+  materialCache.clear();
 }
 
 export function addMesh(root, geometry, color, position, options = {}) {
+  geometry = simplifyGeometry(geometry);
   const mesh = new THREE.Mesh(geometry, material(color, options.material));
   mesh.position.set(...position);
-  mesh.castShadow = options.castShadow ?? true;
+  mesh.castShadow = options.castShadow ?? getSceneQuality().id === "HIGH";
   mesh.receiveShadow = options.receiveShadow ?? true;
+  mesh.userData.distanceCull = true;
   if (options.rotation) mesh.rotation.set(...options.rotation);
   if (options.scale) mesh.scale.set(...options.scale);
   root.add(mesh);
@@ -21,15 +35,22 @@ export function addMesh(root, geometry, color, position, options = {}) {
 }
 
 export function addInstances(root, geometry, color, entries, options = {}) {
+  if (!entries.length) return null;
+  geometry = simplifyGeometry(geometry);
+  const quality = getSceneQuality();
+  const count = Math.max(1, Math.ceil(entries.length * quality.crowdScale));
+  const selectedEntries = count >= entries.length
+    ? entries
+    : Array.from({ length: count }, (_, index) => entries[Math.floor(index * entries.length / count)]);
   const mesh = new THREE.InstancedMesh(
     geometry,
     material(color, {
       vertexColors: Boolean(options.vertexColors && geometry.getAttribute("color")),
     }),
-    entries.length,
+    selectedEntries.length,
   );
   const transform = new THREE.Object3D();
-  entries.forEach((entry, index) => {
+  selectedEntries.forEach((entry, index) => {
     transform.position.set(...entry.position);
     transform.scale.set(...(entry.scale || [1, 1, 1]));
     transform.rotation.set(...(entry.rotation || [0, 0, 0]));
@@ -39,8 +60,9 @@ export function addInstances(root, geometry, color, entries, options = {}) {
   });
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.castShadow = options.castShadow ?? true;
+  mesh.castShadow = options.castShadow ?? quality.id === "HIGH";
   mesh.receiveShadow = true;
+  mesh.userData.distanceCull = false;
   root.add(mesh);
   return mesh;
 }
@@ -111,6 +133,7 @@ export function addDistanceSigns(root, distance, style) {
 
 export function addThemeArch(root, theme, style, z, label) {
   const arch = new THREE.Group();
+  arch.userData.dynamic = true;
   arch.position.z = z;
   const x = TRACK_WIDTH / 2 + 0.9;
   if (style === "park") {
@@ -193,9 +216,12 @@ export function addThemeArch(root, theme, style, z, label) {
         [(index - 1.5) * 0.68, 6.1, 0.5],
         { material: { emissive: goLamp ? "#25894b" : "#a93636", emissiveIntensity: 0.1 } },
       );
-      const light = new THREE.PointLight(goLamp ? "#75ed9f" : "#f37b6c", 0.05, 8);
-      light.position.copy(bulb.position);
-      arch.add(light);
+      let light = null;
+      if (getSceneQuality().id === "HIGH") {
+        light = new THREE.PointLight(goLamp ? "#75ed9f" : "#f37b6c", 0.05, 8);
+        light.position.copy(bulb.position);
+        arch.add(light);
+      }
       arch.userData.startLamps.push({ bulb, light, goLamp });
     }
   }
@@ -204,8 +230,14 @@ export function addThemeArch(root, theme, style, z, label) {
 }
 
 export function createCrowd(root, positions, colors, options = {}) {
-  const bodyGeometry = new THREE.CapsuleGeometry(0.16, 0.34, 2, 5);
-  const headGeometry = new THREE.SphereGeometry(0.14, 8, 6);
+  if (!positions.length) return () => {};
+  const quality = getSceneQuality();
+  const count = Math.max(1, Math.ceil(positions.length * quality.crowdScale));
+  positions = count >= positions.length
+    ? positions
+    : Array.from({ length: count }, (_, index) => positions[Math.floor(index * positions.length / count)]);
+  const bodyGeometry = new THREE.CapsuleGeometry(0.16, 0.34, 1, quality.id === "HIGH" ? 5 : 3);
+  const headGeometry = new THREE.SphereGeometry(0.14, quality.id === "HIGH" ? 8 : 5, quality.id === "HIGH" ? 6 : 4);
   const bodyMaterial = material("#ffffff");
   const headMaterial = material("#ffffff");
   const bodies = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, positions.length);
@@ -235,7 +267,11 @@ export function createCrowd(root, positions, colors, options = {}) {
   bodies.instanceColor.needsUpdate = true;
   heads.instanceColor.needsUpdate = true;
   root.add(bodies, heads);
+  let frame = 0;
   return (time, excitement = 0.06) => {
+    if (quality.crowdAnimationInterval === 0) return;
+    frame += 1;
+    if (frame % quality.crowdAnimationInterval !== 0) return;
     positions.forEach((entry, index) => {
       const bob = Math.abs(Math.sin(time * 2.4 + entry.phase)) * excitement;
       dummy.position.set(entry.x, entry.y + 0.25 * (entry.scale || 1) + bob, entry.z);
@@ -251,6 +287,53 @@ export function createCrowd(root, positions, colors, options = {}) {
     bodies.instanceMatrix.needsUpdate = true;
     heads.instanceMatrix.needsUpdate = true;
   };
+}
+
+function simplifyGeometry(geometry) {
+  const quality = getSceneQuality();
+  if (quality.id === "HIGH") return geometry;
+  const scale = quality.id === "MEDIUM" ? 0.65 : 0.4;
+  const params = geometry.parameters || {};
+  let simplified = geometry;
+  if (geometry.type === "SphereGeometry") {
+    simplified = new THREE.SphereGeometry(
+      params.radius,
+      Math.max(4, Math.floor(params.widthSegments * scale)),
+      Math.max(3, Math.floor(params.heightSegments * scale)),
+      params.phiStart,
+      params.phiLength,
+      params.thetaStart,
+      params.thetaLength,
+    );
+  } else if (geometry.type === "CylinderGeometry") {
+    simplified = new THREE.CylinderGeometry(
+      params.radiusTop,
+      params.radiusBottom,
+      params.height,
+      Math.max(3, Math.floor(params.radialSegments * scale)),
+      Math.max(1, Math.floor(params.heightSegments * scale)),
+      params.openEnded,
+      params.thetaStart,
+      params.thetaLength,
+    );
+  } else if (geometry.type === "ConeGeometry") {
+    simplified = new THREE.ConeGeometry(
+      params.radius,
+      params.height,
+      Math.max(3, Math.floor(params.radialSegments * scale)),
+      Math.max(1, Math.floor(params.heightSegments * scale)),
+      params.openEnded,
+      params.thetaStart,
+      params.thetaLength,
+    );
+  } else if (geometry.type === "IcosahedronGeometry" || geometry.type === "DodecahedronGeometry") {
+    const detail = quality.id === "MEDIUM" ? 0 : Math.min(1, params.detail || 0);
+    simplified = geometry.type === "IcosahedronGeometry"
+      ? new THREE.IcosahedronGeometry(params.radius, detail)
+      : new THREE.DodecahedronGeometry(params.radius, detail);
+  }
+  if (simplified !== geometry) geometry.dispose();
+  return simplified;
 }
 
 export function addWavingFlags(root, positions, colors) {

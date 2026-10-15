@@ -9,28 +9,7 @@ import ExitDialog from "../../../components/ExitDialog";
 import ResultsPanel from "../../../components/ResultsPanel";
 import { GameSocket } from "../../../lib/socket";
 import { DEFAULT_THEME } from "../../../lib/themes";
-
-function playVictorySound() {
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const context = new AudioContextClass();
-    [659, 784, 988, 1319].forEach((frequency, index) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = "triangle";
-      oscillator.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.045, context.currentTime + index * 0.1);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + index * 0.1 + 0.38);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(context.currentTime + index * 0.1);
-      oscillator.stop(context.currentTime + index * 0.1 + 0.38);
-    });
-    setTimeout(() => context.close(), 900);
-  } catch {
-    // Browser audio is optional.
-  }
-}
+import { playToneSequence } from "../../../lib/audio";
 
 export default function RoomPage() {
   const { code: routeCode } = useParams();
@@ -57,15 +36,16 @@ export default function RoomPage() {
   const [leaving, setLeaving] = useState(false);
   const [slowMotion, setSlowMotion] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [hudUnmounted, setHudUnmounted] = useState(false);
   const socketRef = useRef(null);
   const joinedIdRef = useRef(null);
   const leavingRef = useRef(false);
   const navigationTimerRef = useRef(null);
-  const lastUiStateAtRef = useRef(0);
   const latestGameStateRef = useRef(null);
   const celebratedFinishRef = useRef(null);
   const recordedResultRef = useRef(null);
   const toastTimersRef = useRef(new Set());
+  const hudUnmountTimerRef = useRef(null);
   joinedIdRef.current = joined?.id || null;
 
   const showToast = useCallback((message) => {
@@ -111,11 +91,10 @@ export default function RoomPage() {
       const localBefore = latestGameStateRef.current?.players?.[joinedIdRef.current];
       const localNow = message.players?.[joinedIdRef.current];
       const justFinished = localNow?.finishPlace && !localBefore?.finishPlace;
+      const phaseChanged = latestGameStateRef.current?.state !== message.state;
       latestGameStateRef.current = message;
-      const now = performance.now();
-      if (justFinished || now - lastUiStateAtRef.current >= 100 || message.state === "finished") {
+      if (phaseChanged || justFinished || message.state === "finished") {
         setGameState(message);
-        lastUiStateAtRef.current = now;
       }
       setCountdown(null);
       return;
@@ -222,7 +201,12 @@ export default function RoomPage() {
     if (celebratedFinishRef.current === celebrationKey) return undefined;
     celebratedFinishRef.current = celebrationKey;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!muted && localFinishPlace === 1) playVictorySound();
+    if (!muted && localFinishPlace === 1) {
+      playToneSequence([659, 784, 988, 1319].map((frequency, index) => [
+        frequency,
+        index * 0.1,
+      ]));
+    }
     if (localFinishPlace === 1 && !reduced) {
       setSlowMotion(true);
       const timer = setTimeout(() => setSlowMotion(false), 1000);
@@ -290,6 +274,16 @@ export default function RoomPage() {
       setError("Could not copy your result. Please check clipboard permissions.");
     }
   };
+
+  useEffect(() => {
+    clearTimeout(hudUnmountTimerRef.current);
+    if (!results) {
+      setHudUnmounted(false);
+      return undefined;
+    }
+    hudUnmountTimerRef.current = setTimeout(() => setHudUnmounted(true), 150);
+    return () => clearTimeout(hudUnmountTimerRef.current);
+  }, [results]);
 
   if (leaving) {
     return <main className="leave-transition" role="status">Leaving the race…</main>;
@@ -371,16 +365,23 @@ export default function RoomPage() {
             theme={selectedTheme}
             raceDistance={raceDistance}
             slowMotion={slowMotion}
+            resultsOpen={Boolean(results)}
+            stateSnapshotRef={latestGameStateRef}
           />
-          <HUD
-            state={gameState}
-            me={joined}
-            players={players}
-            countdown={countdown}
-            onTap={tap}
-            muted={muted}
-            tapDisabled={tapsDisabled}
-          />
+          {!hudUnmounted && (
+            <div className={`game-hud-shell ${results ? "results-hidden" : ""}`}>
+              <HUD
+                state={gameState}
+                stateSnapshotRef={latestGameStateRef}
+                me={joined}
+                players={players}
+                countdown={countdown}
+                onTap={tap}
+                muted={muted}
+                tapDisabled={tapsDisabled}
+              />
+            </div>
+          )}
           {localFinished && !results && (
             <section className={`finish-banner finish-place-${localFinishPlace}`} aria-live="assertive">
               {localFinishPlace === 1 && <div className="finish-confetti" aria-hidden="true">{Array.from({ length: 14 }, (_, index) => <i key={index} style={{ left: `${4 + index * 7}%`, animationDelay: `${index * 22}ms` }} />)}</div>}

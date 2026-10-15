@@ -10,6 +10,7 @@ import {
   makeSignTexture,
   material,
 } from "./shared";
+import { getSceneQuality } from "../quality";
 
 export function buildStadium(root, theme, trackLength, raceDistance) {
   const callbacks = [];
@@ -98,10 +99,12 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
   for (const [index, [x, , z]] of towerPositions.entries()) {
     addMesh(root, new THREE.BoxGeometry(0.38, 16, 0.38), "#becdce", [x, 8, z]);
     addMesh(root, new THREE.BoxGeometry(2.5, 0.3, 0.55), "#e8e5d9", [x, 16.15, z]);
-    for (let lamp = 0; lamp < 3; lamp += 1) {
-      const light = new THREE.PointLight(index % 2 ? "#fff2ca" : "#fff8df", 0.9, 55);
-      light.position.set(x + (lamp - 1) * 0.66, 15.9, z);
-      root.add(light);
+    if (getSceneQuality().id === "HIGH") {
+      for (let lamp = 0; lamp < 3; lamp += 1) {
+        const light = new THREE.PointLight(index % 2 ? "#fff2ca" : "#fff8df", 0.9, 55);
+        light.position.set(x + (lamp - 1) * 0.66, 15.9, z);
+        root.add(light);
+      }
     }
   }
 
@@ -196,6 +199,7 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
       [-85 + index * 27, 37 + index % 3 * 4, -index * trackLength / 7],
       { scale: [9, 2.6, 4] },
     );
+    cloud.userData.dynamic = true;
     clouds.push({ object: cloud, baseX: cloud.position.x, phase: index * 0.9 });
   }
   callbacks.push((time) => clouds.forEach(({ object, baseX, phase }) => {
@@ -220,6 +224,6 @@ function updateLamps(arch, countdown, time) {
       : typeof countdown === "number" && !goLamp && index < countdown;
     const glow = active ? 1.5 + Math.sin(time * 10) * 0.15 : 0.08;
     bulb.material.emissiveIntensity = glow;
-    light.intensity = active ? glow : 0.02;
+    if (light) light.intensity = active ? glow : 0.02;
   });
 }

@@ -1,11 +1,13 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { getTheme } from "./themes";
 import { TRACK_LENGTH, LANE_COUNT, LANE_WIDTH, TRACK_WIDTH } from "./themes/constants";
-import { addLaneMarkings, material, makeSignTexture } from "./themes/shared";
+import { addLaneMarkings, clearThemeMaterialCache, material, makeSignTexture } from "./themes/shared";
 import { buildStadium } from "./themes/stadium";
 import { buildPark } from "./themes/park";
 import { buildDesert } from "./themes/desert";
 import { buildSnow } from "./themes/snow";
+import { getSceneQuality } from "./quality";
 
 export { TRACK_LENGTH, LANE_COUNT, LANE_WIDTH, TRACK_WIDTH };
 
@@ -16,9 +18,61 @@ const BUILDERS = {
   snow: buildSnow,
 };
 
+function mergeStaticMeshes(root) {
+  const groups = new Map();
+  root.updateMatrixWorld(true);
+  root.traverse((object) => {
+    if (!object.isMesh || object.isInstancedMesh || object.userData.dynamic) return;
+    if (
+      Array.isArray(object.material)
+      || object.material?.map
+      || object.material?.transparent
+      || object.material?.isShaderMaterial
+    ) return;
+    let parent = object.parent;
+    while (parent && parent !== root) {
+      if (parent.userData.dynamic) return;
+      parent = parent.parent;
+    }
+    const position = object.getWorldPosition(new THREE.Vector3());
+    const bucket = `${Math.floor(position.x / 60)}:${Math.floor(position.z / 80)}`;
+    const geometry = object.geometry;
+    const attributes = Object.keys(geometry.attributes).sort().join(",");
+    const key = `${object.material.uuid}:${geometry.type}:${attributes}:${Boolean(geometry.index)}:${bucket}`;
+    if (!groups.has(key)) groups.set(key, []);
+    const transformed = geometry.clone().toNonIndexed();
+    transformed.applyMatrix4(object.matrixWorld);
+    groups.get(key).push({ object, transformed });
+  });
+
+  root.userData.mergedSourceGeometries = [];
+  for (const entries of groups.values()) {
+    if (entries.length < 2) {
+      entries.forEach(({ transformed }) => transformed.dispose());
+      continue;
+    }
+    const geometry = mergeGeometries(entries.map(({ transformed }) => transformed), false);
+    entries.forEach(({ transformed }) => transformed.dispose());
+    if (!geometry) continue;
+    geometry.computeBoundingSphere();
+    const source = entries[0].object;
+    const merged = new THREE.Mesh(geometry, source.material);
+    merged.name = "merged-static-scenery";
+    merged.castShadow = source.castShadow;
+    merged.receiveShadow = source.receiveShadow;
+    merged.userData.staticMerged = true;
+    entries.forEach(({ object }) => {
+      root.userData.mergedSourceGeometries.push(object.geometry);
+      object.removeFromParent();
+    });
+    root.add(merged);
+  }
+}
+
 function createSky(theme, trackLength) {
+  const segments = getSceneQuality().id === "HIGH" ? [32, 18] : [16, 10];
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(1500, 32, 18),
+    new THREE.SphereGeometry(1500, ...segments),
     new THREE.ShaderMaterial({
       uniforms: {
         topColor: { value: new THREE.Color(theme.skyTop) },
@@ -52,8 +106,9 @@ function createSky(theme, trackLength) {
 }
 
 function createSun(theme) {
+  const segments = getSceneQuality().id === "HIGH" ? [16, 10] : [8, 6];
   const sun = new THREE.Mesh(
-    new THREE.SphereGeometry(theme.environment === "stadium" ? 5.5 : 7, 16, 10),
+    new THREE.SphereGeometry(theme.environment === "stadium" ? 5.5 : 7, ...segments),
     new THREE.MeshBasicMaterial({ color: theme.sun, fog: false }),
   );
   sun.position.set(...theme.sunPosition);
@@ -154,6 +209,20 @@ export function createTrackWorld(themeId, initialDistance = 400) {
   addCourseSurface(root, theme, initialDistance);
   const builder = BUILDERS[theme.environment];
   const environment = builder(root, theme, initialDistance, initialDistance);
+  mergeStaticMeshes(root);
+  root.traverse((object) => {
+    if (
+      (object.isMesh || object.isInstancedMesh)
+      && !object.userData.staticMerged
+      && object.name !== "themed-full-length-ground"
+      && object.name !== "straight-running-track"
+      && object.name !== "themed-gradient-sky"
+    ) {
+      object.userData.distanceCull = true;
+    }
+  });
+  let updateFrame = 0;
+  const quality = getSceneQuality();
 
   return {
     root,
@@ -161,9 +230,28 @@ export function createTrackWorld(themeId, initialDistance = 400) {
     finishArch: environment.finishArch,
     update({ time, countdown, raceDistance, progress = 0, raceTime = 0 }) {
       if (environment.finishArch) environment.finishArch.position.z = -raceDistance;
-      environment.update(time, progress, raceTime, countdown);
+      updateFrame += 1;
+      if (quality.crowdAnimationInterval === 0) return;
+      if (updateFrame % quality.crowdAnimationInterval === 0) {
+        environment.update(time, progress, raceTime, countdown);
+      }
     },
   };
+}
+
+export function cullTrackWorld(world, camera, frame) {
+  if (frame % 8 !== 0) return;
+  const quality = getSceneQuality();
+  const ahead = quality.id === "HIGH" ? 150 : quality.id === "MEDIUM" ? 150 : 100;
+  const behind = 50;
+  const position = new THREE.Vector3();
+  world.root.updateMatrixWorld(true);
+  world.root.traverse((object) => {
+    if (!object.userData.distanceCull) return;
+    object.getWorldPosition(position);
+    object.visible = position.z <= camera.position.z + behind
+      && position.z >= camera.position.z - ahead;
+  });
 }
 
 export function disposeTrackWorld(world) {
@@ -171,6 +259,7 @@ export function disposeTrackWorld(world) {
   const geometries = new Set();
   const materials = new Set();
   const textures = new Set();
+  (world.root.userData.mergedSourceGeometries || []).forEach((geometry) => geometries.add(geometry));
   world.root.traverse((object) => {
     if (object.geometry) geometries.add(object.geometry);
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
@@ -185,5 +274,6 @@ export function disposeTrackWorld(world) {
   textures.forEach((texture) => texture.dispose());
   materials.forEach((item) => item.dispose());
   geometries.forEach((geometry) => geometry.dispose());
+  clearThemeMaterialCache();
   world.root.removeFromParent();
 }

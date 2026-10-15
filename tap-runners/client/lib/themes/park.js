@@ -91,6 +91,7 @@ export function buildPark(root, theme, trackLength, raceDistance) {
   addInstances(root, new THREE.DodecahedronGeometry(1, 0), "#ffffff", hillEntries, { vertexColors: true });
 
   const wheel = new THREE.Group();
+  wheel.userData.dynamic = true;
   wheel.position.set(58, 15, -trackLength * 0.48);
   const rim = new THREE.Mesh(new THREE.TorusGeometry(9, 0.28, 8, 36), material("#f3a4b9"));
   wheel.add(rim);
@@ -112,6 +113,7 @@ export function buildPark(root, theme, trackLength, raceDistance) {
   updates.push((time) => { wheel.rotation.z = time * 0.045; });
 
   const carousel = new THREE.Group();
+  carousel.userData.dynamic = true;
   carousel.position.set(-57, 1.3, -trackLength * 0.7);
   addMesh(carousel, new THREE.CylinderGeometry(5.5, 6.3, 0.55, 16), "#edb452", [0, 0, 0]);
   addMesh(carousel, new THREE.ConeGeometry(6.4, 2.2, 12), "#e78092", [0, 2, 0]);
@@ -136,6 +138,7 @@ export function buildPark(root, theme, trackLength, raceDistance) {
       [-88 + index * 22, 22 + index % 4 * 5, -index * trackLength / 8],
       { scale: [2.1, 2.7, 1.9] },
     );
+    balloon.userData.dynamic = true;
     addMesh(root, new THREE.ConeGeometry(0.38, 0.8, 6), "#c99d72", [
       balloon.position.x, balloon.position.y - 3.1, balloon.position.z,
     ], { rotation: [Math.PI, 0, 0] });
@@ -186,6 +189,7 @@ export function buildPark(root, theme, trackLength, raceDistance) {
       [-80 + index * 20, 35 + index % 3 * 3, -index * trackLength / 9],
       { scale: [8, 2.5, 4] },
     );
+    cloud.userData.dynamic = true;
     clouds.push({ cloud, baseX: cloud.position.x, phase: index });
   }
   updates.push((time) => clouds.forEach(({ cloud, baseX, phase }) => {

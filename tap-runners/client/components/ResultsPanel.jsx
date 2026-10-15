@@ -1,30 +1,9 @@
-"use client";
-
-import { useEffect, useState } from "react";
-
 const MEDALS = ["🥇", "🥈", "🥉"];
 const suffix = (value) => {
   const digit = value % 10;
   const tens = value % 100;
   return `${value}${digit === 1 && tens !== 11 ? "ST" : digit === 2 && tens !== 12 ? "ND" : digit === 3 && tens !== 13 ? "RD" : "TH"}`;
 };
-
-function AnimatedMetric({ value, digits = 1, suffix: unit = "" }) {
-  const target = Number(value) || 0;
-  const [shown, setShown] = useState(0);
-  useEffect(() => {
-    const started = performance.now();
-    const duration = 650;
-    const timer = setInterval(() => {
-      const progress = Math.min(1, (performance.now() - started) / duration);
-      const ease = 1 - (1 - progress) ** 3;
-      setShown(target * ease);
-      if (progress >= 1) clearInterval(timer);
-    }, 40);
-    return () => clearInterval(timer);
-  }, [target]);
-  return <>{shown.toFixed(digits)}{unit}</>;
-}
 
 export default function ResultsPanel({
   results,
@@ -38,7 +17,9 @@ export default function ResultsPanel({
   onExit,
 }) {
   const placed = results.players.filter((player) => player.place);
-  const podium = [1, 0, 2].map((index) => placed[index]).filter(Boolean);
+  const podium = [2, 1, 3]
+    .map((place) => placed.find((player) => player.place === place))
+    .filter(Boolean);
   return (
     <div className="results-overlay">
       <section className="results-card results-panel">
@@ -49,7 +30,7 @@ export default function ResultsPanel({
 
         <div className="podium">
           {podium.map((player, index) => (
-            <div className={`podium-runner podium-place-${player.place}`} key={player.id} style={{ "--row-delay": `${index * 110}ms` }}>
+            <div className={`podium-runner podium-place-${player.place}`} key={player.id} style={{ "--row-delay": `${index * 80}ms` }}>
               <div className="podium-avatar" style={{ "--avatar-color": player.color }}>
                 {player.name.slice(0, 1).toUpperCase()}
                 <span>{MEDALS[player.place - 1]}</span>
@@ -68,13 +49,18 @@ export default function ResultsPanel({
             </thead>
             <tbody>
               {results.players.map((player, index) => (
-                <tr className={player.id === me?.id ? "local-result" : ""} key={player.id} style={{ "--row-delay": `${index * 90}ms` }}>
+                <tr className={player.id === me?.id ? "local-result" : ""} key={player.id} style={{ "--row-delay": `${index * 80}ms` }}>
                   <td>{player.dnf ? "DNF" : suffix(player.place)}</td>
-                  <td><i style={{ background: player.color }} />{player.name}{player.id === me?.id ? " (YOU)" : ""}</td>
-                  <td>{player.time === null ? "—" : <AnimatedMetric value={player.time} digits={2} unit="s" />}</td>
-                  <td><AnimatedMetric value={player.avgSpeed * 3.6} unit=" km/h" /></td>
-                  <td><AnimatedMetric value={player.topSpeed * 3.6} unit=" km/h" /></td>
-                  <td><AnimatedMetric value={player.taps} digits={0} /></td>
+                  <td>
+                    <span className="result-runner-name"><i style={{ background: player.color }} />{player.name}{player.id === me?.id ? " (YOU)" : ""}</span>
+                    <small className="result-mobile-stats">
+                      {(player.avgSpeed * 3.6).toFixed(1)} avg - {(player.topSpeed * 3.6).toFixed(1)} top - {player.taps} taps
+                    </small>
+                  </td>
+                  <td>{player.time === null ? "—" : `${player.time.toFixed(2)}s`}</td>
+                  <td>{(player.avgSpeed * 3.6).toFixed(1)} km/h</td>
+                  <td>{(player.topSpeed * 3.6).toFixed(1)} km/h</td>
+                  <td>{player.taps}</td>
                 </tr>
               ))}
             </tbody>
@@ -84,7 +70,7 @@ export default function ResultsPanel({
         <div className="results-actions">
           {isHost
             ? <button className="primary-button" onClick={onPlayAgain}>PLAY AGAIN</button>
-            : <span className="waiting-host">Waiting for host…</span>}
+            : <button className="primary-button" type="button" disabled>Waiting for host...</button>}
           <button className="secondary-button" onClick={onBackToLobby} disabled={!isHost}>BACK TO LOBBY</button>
           <button className="secondary-button" onClick={onShare}>SHARE RESULT</button>
           <button className="exit-inline-button" onClick={onExit}>EXIT</button>
