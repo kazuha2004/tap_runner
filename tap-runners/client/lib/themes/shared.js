@@ -23,7 +23,9 @@ export function addMesh(root, geometry, color, position, options = {}) {
 export function addInstances(root, geometry, color, entries, options = {}) {
   const mesh = new THREE.InstancedMesh(
     geometry,
-    material(color, { vertexColors: Boolean(options.vertexColors) }),
+    material(color, {
+      vertexColors: Boolean(options.vertexColors && geometry.getAttribute("color")),
+    }),
     entries.length,
   );
   const transform = new THREE.Object3D();
@@ -204,8 +206,8 @@ export function addThemeArch(root, theme, style, z, label) {
 export function createCrowd(root, positions, colors, options = {}) {
   const bodyGeometry = new THREE.CapsuleGeometry(0.16, 0.34, 2, 5);
   const headGeometry = new THREE.SphereGeometry(0.14, 8, 6);
-  const bodyMaterial = material("#ffffff", { vertexColors: true });
-  const headMaterial = material("#ffffff", { vertexColors: true });
+  const bodyMaterial = material("#ffffff");
+  const headMaterial = material("#ffffff");
   const bodies = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, positions.length);
   const heads = new THREE.InstancedMesh(headGeometry, headMaterial, positions.length);
   const dummy = new THREE.Object3D();

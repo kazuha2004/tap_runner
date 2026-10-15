@@ -2,7 +2,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Tap Runners — Race your rhythm",
-  description: "A neon multiplayer tap-racing game. Make every tap count.",
+  description: "A colorful multiplayer tap-racing game. Make every tap count.",
 };
 
 export default function RootLayout({ children }) {

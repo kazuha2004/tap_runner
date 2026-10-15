@@ -85,7 +85,7 @@ export function buildPark(root, theme, trackLength, raceDistance) {
     hillEntries.push({
       position: [side * (78 + index % 4 * 24), size * 0.36, -row * trackLength / 26],
       scale: [size * 1.8, size * 0.8, size],
-      color: index % 2 ? "#9b71bc" : "#78599e",
+      color: index % 2 ? theme.hillFar : theme.hill,
     });
   }
   addInstances(root, new THREE.DodecahedronGeometry(1, 0), "#ffffff", hillEntries, { vertexColors: true });

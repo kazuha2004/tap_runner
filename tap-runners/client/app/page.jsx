@@ -65,42 +65,50 @@ export default function HomePage() {
 
   return (
     <main className="home-page">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
+      <div className="home-cloud home-cloud-one" aria-hidden="true" />
+      <div className="home-cloud home-cloud-two" aria-hidden="true" />
+      <div className="home-cloud home-cloud-three" aria-hidden="true" />
+      <div className="home-landscape" aria-hidden="true">
+        <div className="home-hill home-hill-back" />
+        <div className="home-hill home-hill-front" />
+        <div className="home-track" />
+      </div>
       <nav className="topbar">
         <a className="brand" href="/" aria-label="Tap Runners home">
-          <span className="brand-mark">↗</span> TAP<span>RUNNERS</span>
+          <span className="brand-mark" aria-hidden="true">↗</span>
+          <span className="brand-name">TAP RUNNERS</span>
         </a>
         <span className="top-note"><i className="live-dot" /> MULTIPLAYER ARCADE</span>
       </nav>
       <section className="hero">
         <div className="hero-copy">
           <div className="eyebrow"><span /> YOUR THUMBS. YOUR RHYTHM. YOUR RACE.</div>
-          <h1>RUN THE<br /><span>RHYTHM.</span></h1>
+          <h1><span className="headline-navy">RUN THE</span><span className="headline-orange">RHYTHM.</span></h1>
           <p className="hero-description">
             Tap to build speed. Find your flow. Leave everyone else in your dust.
           </p>
           <div className="feature-row">
-            <span><b>01</b> TAP TO ACCELERATE</span>
-            <span><b>02</b> HOLD YOUR RHYTHM</span>
-            <span><b>03</b> TAKE THE WIN</span>
+            <span><b>1</b> Tap to accelerate</span>
+            <span><b>2</b> Hold your rhythm</span>
+            <span><b>3</b> Take the win</span>
           </div>
         </div>
         <section className="join-card">
-          <div className="card-kicker">READY, RUNNER?</div>
-          <h2>Get in the race.</h2>
-          <label className="field-label" htmlFor="player-name">YOUR RUNNER NAME</label>
+          <div className="join-card-banner">READY, RUNNER?</div>
+          <div className="join-card-content">
+          <h2>Get in the race!</h2>
+          <label className="field-label" htmlFor="player-name">Your runner name</label>
           <input
             id="player-name"
             className="text-field"
             maxLength={18}
-            placeholder="e.g. Neon Nova"
+            placeholder="e.g. Sunny Sprinter"
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && createRoom()}
           />
           <button className="primary-button" onClick={createRoom} disabled={busy}>
-            {busy ? "MAKING YOUR ROOM..." : "CREATE A ROOM"} <span>↗</span>
+            {busy ? "Making your room…" : "CREATE A ROOM"} <span>↗</span>
           </button>
           <div className="or-divider"><span /> OR JOIN A FRIEND <span /></div>
           <form className="join-row" onSubmit={joinRoom}>
@@ -108,20 +116,20 @@ export default function HomePage() {
               className="text-field code-input"
               aria-label="Room code"
               maxLength={4}
-              placeholder="ROOM CODE"
+              placeholder="CODE"
               value={code}
               onChange={(event) => setCode(event.target.value.toUpperCase())}
             />
             <button className="join-button" type="submit" aria-label="Join room">JOIN ↗</button>
           </form>
           {error && <p className="form-error" role="alert">{error}</p>}
-          <div className="card-foot"><span>◎</span> UP TO 8 RUNNERS · 100–800M SPRINTS · ONE WINNER</div>
+          <div className="card-foot"><span aria-hidden="true">●</span> Up to 8 runners · 100–800m sprints · one winner</div>
+          </div>
         </section>
       </section>
       <div className="home-bottom">
-        <div className="track-decoration"><span /><span /><span /></div>
         <span>THE RACE IS BETTER TOGETHER</span>
-        <span className="bottom-right">NO DOWNLOAD. JUST GO.</span>
+        <span className="bottom-right">No download. Just go.</span>
       </div>
       {leftToast && <div className="home-toast" role="status">{leftToast}</div>}
     </main>

@@ -314,7 +314,7 @@ export default function RoomPage() {
 
   const showRaceView = isRacing || countdownActive || isFinished;
   return (
-    <main className={`room-page ${isRacing ? "racing" : ""} ${leaving ? "leaving-room" : ""}`}>
+    <main className={`room-page ${!showRaceView ? "in-lobby" : ""} ${isRacing ? "racing" : ""} ${leaving ? "leaving-room" : ""}`}>
       <header className="room-topbar">
         <button className="room-exit-button" onClick={openExit} aria-label="Leave room">×</button>
         <a className="brand" href="/">↗ TAP<span>RUNNERS</span></a>
