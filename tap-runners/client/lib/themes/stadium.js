@@ -51,13 +51,15 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
     }
   }
   for (const endZ of [8, -raceDistance - 8]) {
-    const rearStand = new THREE.Mesh(
-      new THREE.BoxGeometry(TRACK_WIDTH + 20, 5.6, 3.2),
-      material("#e5e3d4"),
-    );
-    rearStand.position.set(0, 3.3, endZ);
-    rearStand.castShadow = true;
-    stands.add(rearStand);
+    if (endZ < 0) {
+      const rearStand = new THREE.Mesh(
+        new THREE.BoxGeometry(TRACK_WIDTH + 20, 5.6, 3.2),
+        material("#e5e3d4"),
+      );
+      rearStand.position.set(0, 3.3, endZ);
+      rearStand.castShadow = true;
+      stands.add(rearStand);
+    }
     for (let tier = 0; tier < 4; tier += 1) {
       const step = new THREE.Mesh(
         new THREE.BoxGeometry(TRACK_WIDTH + 15 - tier * 1.4, 0.52, 1.4),

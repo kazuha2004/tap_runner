@@ -52,32 +52,31 @@ export default function Lobby({
           <h2>Race lobby</h2>
           <span className="player-count">{players.length}<small> / 8</small></span>
         </div>
-        <div className="room-share">
-          <div><span>ROOM CODE</span><b>{code}</b></div>
-          <button type="button" onClick={copyLink}>{copied ? "COPIED ✓" : "COPY LINK ↗"}</button>
-        </div>
-        <div className="roster-head"><span>RUNNERS</span><span>{players.length} / 8</span></div>
-        <div className="player-list">
-          {players.map((player) => (
-            <div className="player-row" key={player.id}>
-              <div className="runner-avatar" style={{ "--runner-color": player.color }}>{player.name.charAt(0).toUpperCase()}</div>
-              <div className="player-details">
-                <b>{player.name}</b>
-                <div className="player-badges">
-                  {player.id === me?.id && <span className="you-badge">YOU</span>}
-                  {player.id === host && <span className="host-badge">HOST</span>}
+        <section className="runner-section">
+          <div className="roster-head"><span>RUNNERS</span><span>{players.length} / 8</span></div>
+          <div className="player-list">
+            {players.map((player) => (
+              <div className="player-row" key={player.id} title={player.name}>
+                <div className="runner-avatar" style={{ "--runner-color": player.color }} aria-label={player.name} role="img">{player.name.charAt(0).toUpperCase()}</div>
+                <div className="player-details">
+                  <b>{player.name}</b>
+                  <div className="player-badges">
+                    {player.id === me?.id && <span className="you-badge">YOU</span>}
+                    {player.id === host && <span className="host-badge">HOST</span>}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-          {Array.from({ length: Math.min(3, Math.max(0, 8 - players.length)) }).map((_, index) => (
-            <div className="player-row empty-slot" key={`empty-${index}`}>
-              <div className="runner-avatar" aria-hidden="true">+</div>
-              <div className="player-details"><b>Waiting for runner...</b></div>
-            </div>
-          ))}
-        </div>
-        <div className="theme-picker">
+            ))}
+            {players.length < 8 && (
+              <div className="player-row empty-slot" title="Waiting for runner...">
+                <div className="runner-avatar" aria-label="Waiting for runner" role="img">+</div>
+                <div className="player-details"><b>Waiting for runner...</b></div>
+              </div>
+            )}
+          </div>
+          {players.length < 7 && <p className="spots-remaining">+{7 - players.length} more spots</p>}
+        </section>
+        <section className="theme-picker">
           <div className="theme-picker-heading">
             <span>RACE THEME</span>
             {!isHost && <small>HOST PICKS</small>}
@@ -107,8 +106,8 @@ export default function Lobby({
               </button>
             ))}
           </div>
-        </div>
-        <div className="distance-picker">
+        </section>
+        <section className="distance-picker">
           <div className="distance-picker-heading">
             <span>RACE DISTANCE</span>
             {!isHost && <small>HOST CHOOSES</small>}
@@ -127,8 +126,8 @@ export default function Lobby({
               </button>
             ))}
           </div>
-          <p className="distance-estimate">About {Math.round(raceDistance * 0.15)} sec with a good rhythm</p>
-        </div>
+          <p className="distance-estimate">About 30 sec</p>
+        </section>
         {isHost
           ? <button className="primary-button start-button" onClick={onStart}>START THE RACE <span>↗</span></button>
           : <button className="primary-button start-button host-wait" type="button" disabled>Waiting for host...</button>}

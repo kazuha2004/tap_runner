@@ -136,14 +136,30 @@ export default function RoomPage() {
     setError("");
     setName(playerName);
     leavingRef.current = false;
-    const socket = new GameSocket({
-      onMessage: handleMessage,
-      onStatus: (status) => setConnection(status),
+    let socket;
+    let joinedOnSocket = false;
+    socket = new GameSocket({
+      onMessage: (message) => {
+        if (socketRef.current !== socket) return;
+        if (message.type === "joined") joinedOnSocket = true;
+        if (message.type === "error" && !joinedOnSocket) {
+          setJoined(null);
+          setPlayers([]);
+          setHost(null);
+        } else if (message.type === "error") {
+          showToast(message.msg);
+          return;
+        }
+        handleMessage(message);
+      },
+      onStatus: (status) => {
+        if (socketRef.current === socket) setConnection(status);
+      },
     });
     socketRef.current?.close();
     socketRef.current = socket;
     socket.connect(code, playerName);
-  }, [code, handleMessage]);
+  }, [code, handleMessage, showToast]);
 
   useEffect(() => {
     setNameInput(initialNameFromUrl);
@@ -318,7 +334,6 @@ export default function RoomPage() {
       <header className="room-topbar">
         <button className="room-exit-button" onClick={openExit} aria-label="Leave room">×</button>
         <a className="brand" href="/">↗ TAP<span>RUNNERS</span></a>
-        <div className="room-code-pill"><span>ROOM</span>{code}</div>
         <div className="room-actions">
           <span className={`connection-badge ${connection === "connected" ? "" : "warning"}`}>
             <i /> {connection === "connected" ? "LIVE" : connection === "error" ? "OFFLINE" : "RECONNECTING"}

@@ -30,11 +30,16 @@ export class GameSocket {
     const socket = new WebSocket(`${socketUrl}/ws`);
     this.socket = socket;
     socket.onopen = () => {
+      if (this.closedByUser || this.socket !== socket) {
+        socket.close();
+        return;
+      }
       this.reconnectDelay = 500;
       this.onStatus?.("connected");
       socket.send(JSON.stringify(this.joinDetails));
     };
     socket.onmessage = (event) => {
+      if (this.closedByUser || this.socket !== socket) return;
       try {
         this.onMessage?.(JSON.parse(event.data));
       } catch {

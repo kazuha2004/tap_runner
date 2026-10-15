@@ -83,6 +83,7 @@ export default function GameCanvas({
   const raceDistanceRef = useRef(raceDistance);
   const finishRef = useRef(false);
   const slowMotionRef = useRef(slowMotion);
+  const reducedMotionRef = useRef(false);
 
   stateRef.current = state;
   meRef.current = me;
@@ -95,6 +96,7 @@ export default function GameCanvas({
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return undefined;
+    reducedMotionRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     let renderer;
     let frameId = 0;
@@ -373,6 +375,20 @@ export default function GameCanvas({
         camera.fov += ((portrait ? 64 : 49) + Math.min(local.speed, 20) * 0.23 - camera.fov) * 0.035;
         camera.updateProjectionMatrix();
         camera.lookAt(runnerX * 0.25, 1.15, runnerZ - (portrait ? 24 : 30));
+      } else if (previewOnly) {
+        const drift = now * 0.075;
+        if (!reducedMotionRef.current) {
+          camera.position.set(
+            Math.sin(drift) * 2.1,
+            10 + Math.sin(drift * 0.7) * 0.45,
+            25 + Math.cos(drift) * 1.1,
+          );
+        }
+        camera.lookAt(
+          reducedMotionRef.current ? 0 : Math.sin(drift) * 1.2,
+          1,
+          -30,
+        );
       } else {
         camera.lookAt(0, 1, -30);
       }
