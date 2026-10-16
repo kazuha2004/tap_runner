@@ -7,9 +7,11 @@ import HUD from "../../../components/HUD";
 import Lobby from "../../../components/Lobby";
 import ExitDialog from "../../../components/ExitDialog";
 import ResultsPanel from "../../../components/ResultsPanel";
-import { GameSocket } from "../../../lib/socket";
+import { GameSocket, getServerHttpUrl } from "../../../lib/socket";
 import { DEFAULT_THEME } from "../../../lib/themes";
 import { playToneSequence } from "../../../lib/audio";
+
+const formatItemName = (item) => item.replaceAll("_", " ");
 
 export default function RoomPage() {
   const { code: routeCode } = useParams();
@@ -24,6 +26,10 @@ export default function RoomPage() {
   const [host, setHost] = useState(null);
   const [selectedTheme, setSelectedTheme] = useState(DEFAULT_THEME);
   const [raceDistance, setRaceDistance] = useState(200);
+  const [itemBoxes, setItemBoxes] = useState([]);
+  const [itemEvents, setItemEvents] = useState([]);
+  const [debugConfig, setDebugConfig] = useState(null);
+  const [debugConfigError, setDebugConfigError] = useState("");
   const [gameState, setGameState] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [results, setResults] = useState(null);
@@ -65,12 +71,28 @@ export default function RoomPage() {
       setError("");
       return;
     }
+    if (message.type === "itemPickedUp") {
+      setItemEvents((current) => [...current.slice(-15), message]);
+      if (message.id === joinedIdRef.current) {
+        showToast(`You got ${formatItemName(message.item)}!`);
+      }
+      return;
+    }
+    if (message.type === "itemUsed") {
+      setItemEvents((current) => [...current.slice(-15), message]);
+      if (message.targetIds?.includes(joinedIdRef.current)) {
+        showToast(`${message.sourceName} used ${formatItemName(message.item)} on you!`);
+      }
+      return;
+    }
     if (message.type === "lobby") {
       setPlayers(message.players || []);
       setHost(message.host);
       setSelectedTheme(message.theme || DEFAULT_THEME);
       setRaceDistance(message.raceDistance || 200);
       if (message.phase === "lobby") {
+        setItemBoxes([]);
+        setItemEvents([]);
         latestGameStateRef.current = null;
         celebratedFinishRef.current = null;
         recordedResultRef.current = null;
@@ -81,6 +103,11 @@ export default function RoomPage() {
         setPersonalBest(null);
         setIsNewBest(false);
       }
+      return;
+    }
+    if (message.type === "raceStart") {
+      setItemBoxes(message.itemBoxes || []);
+      setItemEvents([]);
       return;
     }
     if (message.type === "countdown") {
@@ -110,6 +137,20 @@ export default function RoomPage() {
     }
     if (message.type === "error") setError(message.msg);
   }, [showToast]);
+  const debugEnabled = searchParams.get("debug") === "1";
+
+  useEffect(() => {
+    if (!debugEnabled) return undefined;
+    let active = true;
+    fetch(`${getServerHttpUrl()}/config`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Debug config is available only on a development server.");
+        return response.json();
+      })
+      .then((config) => { if (active) setDebugConfig(config.race); })
+      .catch((fetchError) => { if (active) setDebugConfigError(fetchError.message); });
+    return () => { active = false; };
+  }, [debugEnabled]);
 
   const connect = useCallback((playerName) => {
     setError("");
@@ -296,7 +337,7 @@ export default function RoomPage() {
           <a className="brand" href="/">↗ TAP<span>RUNNERS</span></a>
           <div className="card-kicker">YOU’RE INVITED TO</div>
           <h1>ROOM <span>{code}</span></h1>
-          <p>Pick a runner name and jump into the race.</p>
+          <p>Pick a runner name and join the race.</p>
           <form onSubmit={(event) => { event.preventDefault(); if (nameInput.trim()) connect(nameInput.trim()); }}>
             <label className="field-label" htmlFor="join-name">YOUR RUNNER NAME</label>
             <input id="join-name" className="text-field" maxLength={18} value={nameInput} onChange={(event) => setNameInput(event.target.value)} placeholder="e.g. Neon Nova" autoFocus />
@@ -367,6 +408,8 @@ export default function RoomPage() {
             slowMotion={slowMotion}
             resultsOpen={Boolean(results)}
             stateSnapshotRef={latestGameStateRef}
+            itemBoxes={itemBoxes}
+            itemEvents={itemEvents}
           />
           {!hudUnmounted && (
             <div className={`game-hud-shell ${results ? "results-hidden" : ""}`}>
@@ -379,6 +422,11 @@ export default function RoomPage() {
                 onTap={tap}
                 muted={muted}
                 tapDisabled={tapsDisabled}
+                onUseItem={() => send("useItem")}
+                debugEnabled={debugEnabled}
+                itemBoxes={itemBoxes}
+                debugConfig={debugConfig}
+                debugConfigError={debugConfigError}
               />
             </div>
           )}

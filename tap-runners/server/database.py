@@ -127,6 +127,8 @@ def _race_document(room: GameRoom) -> dict[str, Any]:
                 ),
                 "top_speed": round(player.top_speed, 2),
                 "taps": player.tap_count,
+                "times_overheated": player.times_overheated,
+                "items_used": player.items_used,
                 "dnf": player.finish_place is None,
             }
             for position, player in enumerate(ordered_players, start=1)

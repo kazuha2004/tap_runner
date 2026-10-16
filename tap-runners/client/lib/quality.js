@@ -19,8 +19,8 @@ export const QUALITY = {
     shadowMapSize: 512,
     crowdScale: 0.35,
     crowdAnimationInterval: 2,
-    fogScale: 0.68,
-    cameraFar: 650,
+    fogScale: 0.76,
+    cameraFar: 750,
     targetFps: 60,
   },
   LOW: {
@@ -31,8 +31,8 @@ export const QUALITY = {
     shadowMapSize: 0,
     crowdScale: 0.1,
     crowdAnimationInterval: 0,
-    fogScale: 0.48,
-    cameraFar: 400,
+    fogScale: 0.62,
+    cameraFar: 550,
     targetFps: 30,
   },
 };

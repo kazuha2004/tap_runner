@@ -201,7 +201,32 @@ function addCourseSurface(root, theme, trackLength) {
   }
 }
 
-export function createTrackWorld(themeId, initialDistance = 400) {
+function addItemBoxes(root, theme, boxes) {
+  if (!boxes.length) return null;
+  const texture = makeSignTexture("?", "#f0b53f", "#fffdf5", 128, 128);
+  const mesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.85, 0.85, 0.85),
+    new THREE.MeshToonMaterial({ map: texture, color: "#fffdf5" }),
+    boxes.length,
+  );
+  mesh.name = "race-item-boxes";
+  mesh.userData.distanceCull = false;
+  const transform = new THREE.Object3D();
+  boxes.forEach((box, instanceIndex) => {
+    transform.position.set(
+      (box.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
+      0.8,
+      -box.distance,
+    );
+    transform.updateMatrix();
+    mesh.setMatrixAt(instanceIndex, transform.matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  root.add(mesh);
+  return { mesh, boxes, transform, fadedAt: new Float64Array(boxes.length), texture };
+}
+
+export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = []) {
   const theme = getTheme(themeId);
   const root = new THREE.Group();
   root.name = `race-world-${theme.environment}`;
@@ -210,10 +235,11 @@ export function createTrackWorld(themeId, initialDistance = 400) {
   const builder = BUILDERS[theme.environment];
   const environment = builder(root, theme, initialDistance, initialDistance);
   mergeStaticMeshes(root);
+  let itemBoxSystem = addItemBoxes(root, theme, itemBoxes);
   root.traverse((object) => {
     if (
-      (object.isMesh || object.isInstancedMesh)
-      && !object.userData.staticMerged
+      (object.isMesh || object.isInstancedMesh || object.isPoints)
+      && object.userData.distanceCull !== false
       && object.name !== "themed-full-length-ground"
       && object.name !== "straight-running-track"
       && object.name !== "themed-gradient-sky"
@@ -226,10 +252,46 @@ export function createTrackWorld(themeId, initialDistance = 400) {
 
   return {
     root,
+    cullPosition: new THREE.Vector3(),
+    cullScale: new THREE.Vector3(),
     theme,
     finishArch: environment.finishArch,
+    setItemBoxes(boxes) {
+      if (itemBoxSystem) {
+        root.remove(itemBoxSystem.mesh);
+        itemBoxSystem.mesh.geometry.dispose();
+        itemBoxSystem.mesh.material.dispose();
+        itemBoxSystem.texture?.dispose();
+      }
+      itemBoxSystem = addItemBoxes(root, theme, boxes);
+    },
+    hitItemBox(boxIndex, time) {
+      if (!itemBoxSystem) return;
+      const instanceIndex = itemBoxSystem.boxes.findIndex((box) => box.index === boxIndex);
+      if (instanceIndex >= 0 && !itemBoxSystem.fadedAt[instanceIndex]) {
+        itemBoxSystem.fadedAt[instanceIndex] = time || 0.000001;
+      }
+    },
     update({ time, countdown, raceDistance, progress = 0, raceTime = 0 }) {
       if (environment.finishArch) environment.finishArch.position.z = -raceDistance;
+      if (itemBoxSystem) {
+        for (let index = 0; index < itemBoxSystem.boxes.length; index += 1) {
+          const fadedAt = itemBoxSystem.fadedAt[index];
+          const fade = fadedAt ? Math.max(0, 1 - (time - fadedAt) / 0.3) : 1;
+          const box = itemBoxSystem.boxes[index];
+          itemBoxSystem.transform.position.set(
+            (box.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
+            0.8,
+            -box.distance,
+          );
+          itemBoxSystem.transform.rotation.set(0, time * 0.45, 0);
+          const pulse = 1 + Math.sin(time * 4 + index) * 0.035;
+          itemBoxSystem.transform.scale.setScalar(pulse * fade);
+          itemBoxSystem.transform.updateMatrix();
+          itemBoxSystem.mesh.setMatrixAt(index, itemBoxSystem.transform.matrix);
+        }
+        itemBoxSystem.mesh.instanceMatrix.needsUpdate = true;
+      }
       updateFrame += 1;
       if (quality.crowdAnimationInterval === 0) return;
       if (updateFrame % quality.crowdAnimationInterval === 0) {
@@ -241,16 +303,26 @@ export function createTrackWorld(themeId, initialDistance = 400) {
 
 export function cullTrackWorld(world, camera, frame) {
   if (frame % 8 !== 0) return;
-  const quality = getSceneQuality();
-  const ahead = quality.id === "HIGH" ? 150 : quality.id === "MEDIUM" ? 150 : 100;
+  const ahead = 150;
   const behind = 50;
-  const position = new THREE.Vector3();
+  const position = world.cullPosition;
   world.root.updateMatrixWorld(true);
   world.root.traverse((object) => {
     if (!object.userData.distanceCull) return;
-    object.getWorldPosition(position);
-    object.visible = position.z <= camera.position.z + behind
-      && position.z >= camera.position.z - ahead;
+    // Instanced scenery spans many track positions; the base geometry's center is not its bounds.
+    if (object.isInstancedMesh || object.isPoints || !object.isMesh) return;
+    if (!object.geometry) return;
+    if (!object.geometry.boundingSphere) object.geometry.computeBoundingSphere();
+    position.copy(object.geometry.boundingSphere.center);
+    object.localToWorld(position);
+    object.getWorldScale(world.cullScale);
+    const radius = object.geometry.boundingSphere.radius * Math.max(
+      Math.abs(world.cullScale.x),
+      Math.abs(world.cullScale.y),
+      Math.abs(world.cullScale.z),
+    );
+    object.visible = position.z - radius <= camera.position.z + behind
+      && position.z + radius >= camera.position.z - ahead;
   });
 }
 

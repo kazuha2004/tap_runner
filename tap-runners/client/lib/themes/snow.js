@@ -238,7 +238,7 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
       startArch.userData.startLamps?.forEach(({ bulb, light, goLamp }, index) => {
         const active = countdown === "GO" ? goLamp : typeof countdown === "number" && !goLamp && index < countdown;
         bulb.material.emissiveIntensity = active ? 1.2 + Math.sin(time * 10) * 0.15 : 0.05;
-        light.intensity = active ? 0.8 : 0.02;
+        if (light) light.intensity = active ? 0.8 : 0.02;
       });
     },
   };

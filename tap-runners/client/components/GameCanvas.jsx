@@ -11,7 +11,7 @@ import {
 } from "../lib/trackWorld";
 import { getTheme } from "../lib/themes";
 import { detectQualityPreset, QUALITY, setSceneQuality } from "../lib/quality";
-import { playToneSequence } from "../lib/audio";
+import { playTone, playToneSequence } from "../lib/audio";
 
 function makeNameLabel(name, color) {
   const canvas = document.createElement("canvas");
@@ -42,6 +42,57 @@ function makeNameLabel(name, color) {
   return label;
 }
 
+function makeRunnerStatusLabel() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 52;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  }));
+  sprite.scale.set(0.9, 0.29, 1);
+  sprite.position.y = 1.92;
+  sprite.visible = false;
+  let previousLabel = "";
+  sprite.userData.updateLabel = (item, effects = []) => {
+    const codes = {
+      BOOST: "BOOST",
+      SHIELD: "S",
+      ROCKET: "RKT",
+    };
+    let label = item ? codes[item] || "" : "";
+    for (let index = 0; index < effects.length && label.split("  ").length < 2; index += 1) {
+      const code = codes[effects[index].name];
+      if (code && !label.includes(code)) label += `${label ? "  " : ""}${code}`;
+    }
+    if (label === previousLabel) return;
+    previousLabel = label;
+    sprite.visible = Boolean(label);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (label) {
+      context.fillStyle = "rgba(255,255,255,.96)";
+      context.beginPath();
+      context.roundRect(5, 4, 150, 44, 15);
+      context.fill();
+      context.strokeStyle = "#d6e7e9";
+      context.lineWidth = 3;
+      context.stroke();
+      context.fillStyle = "#1b2a49";
+      context.font = "bold 25px Arial";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, 80, 26);
+    }
+    texture.needsUpdate = true;
+  };
+  return sprite;
+}
+
 export default function GameCanvas({
   state,
   me,
@@ -53,6 +104,8 @@ export default function GameCanvas({
   slowMotion = false,
   resultsOpen = false,
   stateSnapshotRef,
+  itemBoxes = [],
+  itemEvents = [],
 }) {
   const mountRef = useRef(null);
   const stateRef = useRef(state);
@@ -65,6 +118,8 @@ export default function GameCanvas({
   const slowMotionRef = useRef(slowMotion);
   const reducedMotionRef = useRef(false);
   const resultsOpenRef = useRef(resultsOpen);
+  const itemBoxesRef = useRef(itemBoxes);
+  const itemEventsRef = useRef(itemEvents);
   const qualityRef = useRef("HIGH");
   const [showStats, setShowStats] = useState(false);
   const [stats, setStats] = useState({ fps: 0, calls: 0, triangles: 0, quality: "HIGH" });
@@ -78,6 +133,8 @@ export default function GameCanvas({
   raceDistanceRef.current = raceDistance;
   slowMotionRef.current = slowMotion;
   resultsOpenRef.current = resultsOpen;
+  itemBoxesRef.current = itemBoxes;
+  itemEventsRef.current = itemEvents;
   showStatsRef.current = showStats;
 
   useEffect(() => {
@@ -110,6 +167,7 @@ export default function GameCanvas({
     const camera = new THREE.PerspectiveCamera(49, 1, 0.1, initialQuality.cameraFar);
     camera.position.set(0, 10, 25);
     camera.lookAt(0, 1, -25);
+    const desiredCameraPosition = new THREE.Vector3();
 
     try {
       renderer = new THREE.WebGLRenderer({
@@ -158,7 +216,7 @@ export default function GameCanvas({
     fillLight.position.set(70, 48, -120);
     if (qualityRef.current === "HIGH") scene.add(fillLight);
 
-    let world = createTrackWorld(themeRef.current, raceDistanceRef.current);
+    let world = createTrackWorld(themeRef.current, raceDistanceRef.current, itemBoxesRef.current);
     scene.add(world.root);
     function applyWorldShadowPolicy(targetWorld, id) {
       targetWorld.root.traverse((object) => {
@@ -183,6 +241,13 @@ export default function GameCanvas({
       sunlight.shadow.mapSize.set(nextQuality.shadowMapSize || 512, nextQuality.shadowMapSize || 512);
       if (nextId === "HIGH" && !fillLight.parent) scene.add(fillLight);
       if (nextId !== "HIGH" && fillLight.parent) scene.remove(fillLight);
+      for (const [id, runner] of runners) {
+        const shouldCastShadow = nextId === "HIGH"
+          || (nextId === "MEDIUM" && id === meRef.current?.id);
+        runner.group.traverse((object) => {
+          if (object.isMesh) object.castShadow = shouldCastShadow;
+        });
+      }
       camera.far = nextQuality.cameraFar;
       camera.updateProjectionMatrix();
       scene.fog = new THREE.Fog(
@@ -191,7 +256,7 @@ export default function GameCanvas({
         getTheme(themeRef.current).fogFar * nextQuality.fogScale,
       );
       disposeTrackWorld(world);
-      world = createTrackWorld(themeRef.current, raceDistanceRef.current);
+      world = createTrackWorld(themeRef.current, raceDistanceRef.current, itemBoxesRef.current);
       scene.add(world.root);
       applyWorldShadowPolicy(world, nextId);
       renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight), false);
@@ -201,6 +266,8 @@ export default function GameCanvas({
     let previousFrameTime = performance.now();
     let animationTime = 0;
     let observedSnapshot = null;
+    let activeItemBoxes = itemBoxesRef.current;
+    const processedItemEvents = new Set();
     const snapshotHistory = [];
     const runners = new Map();
     const suitMaterials = new Map();
@@ -212,10 +279,19 @@ export default function GameCanvas({
       leg: new THREE.CapsuleGeometry(0.09, 0.31, 2, qualityRef.current === "HIGH" ? 5 : 4),
       ring: new THREE.TorusGeometry(0.45, 0.055, 6, qualityRef.current === "HIGH" ? 24 : 12),
       trail: new THREE.BoxGeometry(0.16, 0.12, 1.6),
+      shield: new THREE.SphereGeometry(1, qualityRef.current === "HIGH" ? 16 : 10, qualityRef.current === "HIGH" ? 12 : 8),
+      puddle: new THREE.CylinderGeometry(1, 1, 0.045, qualityRef.current === "HIGH" ? 16 : 10),
     };
     const skinMaterial = new THREE.MeshLambertMaterial({ color: "#f2bd91" });
     const pantsMaterial = new THREE.MeshLambertMaterial({ color: "#263b4c" });
     const ringMaterial = new THREE.MeshBasicMaterial({ color: "#fff071" });
+    const shieldMaterial = new THREE.MeshBasicMaterial({
+      color: "#78bfe0",
+      transparent: true,
+      opacity: 0.27,
+      depthWrite: false,
+    });
+    const puddleMaterial = new THREE.MeshLambertMaterial({ color: "#8cae88" });
 
     function buildRunner(id, data) {
       const group = new THREE.Group();
@@ -235,7 +311,8 @@ export default function GameCanvas({
       body.castShadow = true;
       group.add(body);
 
-      const head = new THREE.Mesh(sharedRunnerGeometries.head, skinMaterial);
+      const faceMaterial = new THREE.MeshLambertMaterial({ color: "#f2bd91" });
+      const head = new THREE.Mesh(sharedRunnerGeometries.head, faceMaterial);
       head.position.set(0, 1.03, 0);
       head.castShadow = true;
       group.add(head);
@@ -268,21 +345,62 @@ export default function GameCanvas({
       localRing.position.y = 0.06;
       localRing.visible = id === meRef.current?.id;
       group.add(localRing);
+      const puffPositions = new Float32Array(8 * 3);
+      for (let index = 0; index < 8; index += 1) {
+        puffPositions[index * 3] = Math.cos(index * Math.PI / 4) * 0.52;
+        puffPositions[index * 3 + 1] = 0.16 + (index % 3) * 0.14;
+        puffPositions[index * 3 + 2] = Math.sin(index * Math.PI / 4) * 0.52;
+      }
+      const puffGeometry = new THREE.BufferGeometry();
+      puffGeometry.setAttribute("position", new THREE.BufferAttribute(puffPositions, 3));
+      const puffMaterial = new THREE.PointsMaterial({
+        color: "#59bd73",
+        size: qualityRef.current === "LOW" ? 0.08 : 0.11,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      });
+      const puffs = new THREE.Points(puffGeometry, puffMaterial);
+      puffs.visible = false;
+      group.add(puffs);
+      const shieldBubble = new THREE.Mesh(sharedRunnerGeometries.shield, shieldMaterial);
+      shieldBubble.position.y = 0.7;
+      shieldBubble.scale.setScalar(1.35);
+      shieldBubble.visible = false;
+      group.add(shieldBubble);
+      const slowPuddle = new THREE.Mesh(sharedRunnerGeometries.puddle, puddleMaterial);
+      slowPuddle.position.y = 0.06;
+      slowPuddle.scale.set(1.25, 1, 1.5);
+      slowPuddle.visible = false;
+      group.add(slowPuddle);
 
       const nameLabel = makeNameLabel(data.name || "Runner", data.color || "#e94767");
       if (nameLabel) {
         nameLabel.position.y = 1.55;
         group.add(nameLabel);
       }
+      const statusLabel = makeRunnerStatusLabel();
+      if (statusLabel) group.add(statusLabel);
 
       const trail = new THREE.Mesh(
         sharedRunnerGeometries.trail,
         trailMaterials.get(color),
       );
+      const shouldCastShadow = qualityRef.current === "HIGH"
+        || (qualityRef.current === "MEDIUM" && id === meRef.current?.id);
+      group.traverse((object) => {
+        if (object.isMesh) object.castShadow = shouldCastShadow;
+      });
       scene.add(trail);
       scene.add(group);
       runners.set(id, {
         group,
+        faceMaterial,
+        puffs,
+        puffGeometry,
+        shieldBubble,
+        slowPuddle,
+        statusLabel,
         trail,
         arms,
         legs,
@@ -379,6 +497,11 @@ export default function GameCanvas({
       }
       const currentPlayers = currentState?.players || {};
       const currentRaceDistance = currentState?.raceDistance || raceDistanceRef.current;
+      if (itemBoxesRef.current !== activeItemBoxes) {
+        activeItemBoxes = itemBoxesRef.current;
+        world.setItemBoxes(activeItemBoxes);
+        processedItemEvents.clear();
+      }
       const maxProgress = Object.values(currentPlayers).reduce(
         (furthest, player) => Math.max(furthest, player.distance || 0),
         0,
@@ -402,7 +525,7 @@ export default function GameCanvas({
         sunlight.intensity = nextTheme.sunIntensity;
         fillLight.color.set(nextTheme.hemiSky);
         fillLight.position.set(-nextTheme.sunDirection[0], 48, -nextTheme.sunDirection[2]);
-        world = createTrackWorld(activeThemeId, currentRaceDistance);
+        world = createTrackWorld(activeThemeId, currentRaceDistance, itemBoxesRef.current);
         scene.add(world.root);
         applyWorldShadowPolicy(world, qualityRef.current);
       }
@@ -418,6 +541,8 @@ export default function GameCanvas({
         runner.lane = data.lane || 0;
         runner.finished = Boolean(data.finished);
         runner.finishPlace = data.finishPlace;
+        runner.item = data.item || null;
+        runner.activeEffects = data.activeEffects || [];
       });
 
       for (const [id, runner] of runners) {
@@ -425,6 +550,9 @@ export default function GameCanvas({
           scene.remove(runner.group);
           scene.remove(runner.trail);
           runner.group.traverse((object) => object.material?.map?.dispose());
+          runner.faceMaterial.dispose();
+          runner.puffGeometry.dispose();
+          runner.puffs.material.dispose();
           runners.delete(id);
           continue;
         }
@@ -434,19 +562,53 @@ export default function GameCanvas({
         runner.group.visible = inView;
         runner.trail.visible = inView;
         if (!inView) continue;
-        runner.group.traverse((object) => {
-          if (object.isMesh) object.castShadow = qualityRef.current === "HIGH" || (qualityRef.current === "MEDIUM" && isLocal);
-        });
         const predictedDistance = isLocal
           ? runner.targetDistance + runner.speed * 0.18
           : runner.targetDistance;
         runner.distance += (predictedDistance - runner.distance) * (isLocal ? 0.28 : 0.2);
         const x = (runner.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH;
         const z = -runner.distance;
+        const playerSnapshot = currentPlayers[id];
+        const overheated = Boolean(playerSnapshot?.overheated);
+        const inSweetZone = playerSnapshot?.zone === "sweet" && !overheated;
+        const activeEffects = playerSnapshot?.activeEffects || [];
+        let hasShield = false;
+        let hasSlowEffect = false;
+        let hasBoost = false;
+        for (let effectIndex = 0; effectIndex < activeEffects.length; effectIndex += 1) {
+          const effectName = activeEffects[effectIndex].name;
+          if (effectName === "SHIELD") hasShield = true;
+          if (effectName === "ROCKET") hasSlowEffect = true;
+          if (effectName === "BOOST") hasBoost = true;
+        }
+        runner.shieldBubble.visible = hasShield;
+        runner.slowPuddle.visible = hasSlowEffect;
+        let statusKey = playerSnapshot?.item || "";
+        for (let effectIndex = 0; effectIndex < activeEffects.length; effectIndex += 1) {
+          statusKey += `|${activeEffects[effectIndex].name}`;
+        }
+        if (statusKey !== runner.statusKey) {
+          runner.statusKey = statusKey;
+          runner.statusLabel?.userData.updateLabel?.(playerSnapshot?.item, activeEffects);
+        }
+        runner.faceMaterial.color.set(overheated ? "#d87972" : "#f2bd91");
+        runner.puffs.visible = inSweetZone || overheated;
+        runner.puffs.material.color.set(overheated ? "#a6aeb1" : "#58b873");
+        if (runner.puffs.visible && sceneFrame % 3 === 0) {
+          const positions = runner.puffGeometry.attributes.position;
+          for (let puff = 0; puff < positions.count; puff += 1) {
+            const phase = animationTime * 3 + puff * 0.9;
+            positions.setY(puff, 0.15 + ((phase + puff * 0.23) % 1.1));
+            positions.setX(puff, Math.cos(phase) * 0.52);
+            positions.setZ(puff, Math.sin(phase) * 0.52);
+          }
+          positions.needsUpdate = true;
+        }
         runner.group.position.set(x, 0.035, z);
         runner.group.rotation.y = Math.PI;
         runner.group.rotation.x = countdownRef.current === 1 ? -0.18 : 0;
-        const stride = Math.min(1, runner.speed / 9);
+        if (overheated) runner.group.rotation.x = -0.22;
+        const stride = Math.min(1, runner.speed / 9) * (overheated ? 0.28 : 1);
         runner.group.position.y +=
           Math.abs(Math.sin(now * (5 + runner.speed * 1.8))) * 0.055 * stride;
         runner.legs.forEach((leg, index) => {
@@ -465,8 +627,19 @@ export default function GameCanvas({
           }
         }
         runner.trail.position.set(x, 0.14, z + 1.05);
-        runner.trail.scale.z = 0.8 + stride * 1.2;
+        runner.trail.scale.z = (hasBoost ? 2.4 : 0.8)
+          + stride * (hasBoost ? 2.1 : 1.2);
       }
+
+      if (!itemEventsRef.current.length) processedItemEvents.clear();
+      itemEventsRef.current.forEach((event) => {
+        const key = `${event.type}:${event.id}:${event.boxIndex ?? event.item}`;
+        if (processedItemEvents.has(key)) return;
+        processedItemEvents.add(key);
+        if (event.type === "itemPickedUp" && event.id === meRef.current?.id) {
+          world.hitItemBox(event.boxIndex, animationTime);
+        }
+      });
 
       const countdownValue =
         currentState?.state === "racing" || currentState?.state === "finished"
@@ -487,13 +660,13 @@ export default function GameCanvas({
         const runnerX = (local.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH;
         const runnerZ = -local.distance;
         const portrait = mount.clientWidth < mount.clientHeight;
-        const desired = new THREE.Vector3(
+        desiredCameraPosition.set(
           runnerX * 0.38,
           portrait ? 10.4 : 8.2,
           runnerZ + (portrait ? 23 : 18),
         );
-        camera.position.lerp(desired, 0.065);
-        camera.fov += ((portrait ? 64 : 49) + Math.min(local.speed, 20) * 0.23 - camera.fov) * 0.035;
+        camera.position.lerp(desiredCameraPosition, 0.065);
+        camera.fov += ((portrait ? 64 : 49) + Math.min(local.speed, 20) * 0.23 - camera.fov) * 0.12;
         camera.updateProjectionMatrix();
         camera.lookAt(runnerX * 0.25, 1.15, runnerZ - (portrait ? 24 : 30));
       } else if (previewOnly) {
@@ -593,6 +766,8 @@ export default function GameCanvas({
       skinMaterial.dispose();
       pantsMaterial.dispose();
       ringMaterial.dispose();
+      shieldMaterial.dispose();
+      puddleMaterial.dispose();
     };
   }, [previewOnly, stateSnapshotRef]);
 

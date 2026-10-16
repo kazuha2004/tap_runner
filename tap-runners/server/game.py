@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import random
+import secrets
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -9,10 +11,51 @@ from typing import Any
 from database import DatabaseUnavailableError, save_race_result
 
 RACE_CONFIG = {
+    # Base movement, input limits, and race pacing.
     "tap_boost": 0.8,
     "drag": 0.82,
     "max_speed": 12.0,
     "max_taps_per_sec": 12,
+    # About seven steady taps per second stays in the sweet zone; rapid mashing overheats.
+    "heat_per_tap": 6.2,
+    "heat_cool_per_second": 42.0,
+    "heat_sweet_min": 30,
+    "heat_sweet_max": 70,
+    "heat_overheat_threshold": 100,
+    "heat_overheat_seconds": 1.5,
+    "heat_overheat_reset": 60,
+    "heat_overheat_speed_multiplier": 0.65,
+    "heat_sweet_tap_multiplier": 1.25,
+    "rhythm_tap_multiplier": 1.3,
+    "tap_multiplier_cap": 1.6,
+    "final_sprint_distance": 20.0,
+    "final_sprint_tap_multiplier": 1.3,
+    "RUBBER_BAND": True,
+    "rubber_band_start_gap": 15.0,
+    "rubber_band_max_strength": 0.08,
+    # Item boxes grant only boost, shield, or rocket; weights favor racers behind.
+    "item_boxes_per_lane_per_400m": 4,
+    "item_box_first_half_bias": 0.62,
+    "boost_multiplier": 1.4,
+    "boost_seconds": 2.5,
+    "shield_seconds": 6.0,
+    "rocket_multiplier": 0.6,
+    "rocket_seconds": 2.0,
+    "item_weights_leader": {
+        "BOOST": 2,
+        "SHIELD": 2,
+        "ROCKET": 1,
+    },
+    "item_weights_middle": {
+        "BOOST": 2,
+        "SHIELD": 2,
+        "ROCKET": 2,
+    },
+    "item_weights_last": {
+        "BOOST": 2,
+        "SHIELD": 2,
+        "ROCKET": 3,
+    },
     "tick_rate": 30,
     "distances": (100, 200, 400, 800),
     "default_distance": 200,
@@ -60,6 +103,14 @@ class Player:
     tap_count: int = 0
     tap_times: list[float] = field(default_factory=list)
     accepted_taps: list[float] = field(default_factory=list)
+    heat: float = 0.0
+    overheated_until: float = 0.0
+    times_overheated: int = 0
+    item: str | None = None
+    used_box_indices: set[int] = field(default_factory=set)
+    active_effects: dict[str, tuple[float, float]] = field(default_factory=dict)
+    heat_locked_until: float = 0.0
+    items_used: int = 0
 
 
 class GameRoom:
@@ -80,6 +131,9 @@ class GameRoom:
         self.first_finish_at: float | None = None
         self.results_sent = False
         self.result_saved = False
+        self.race_seed = 0
+        self.item_boxes: list[dict[str, Any]] = []
+        self._item_random = random.Random()
 
     def unique_name(self, requested: str) -> str:
         base = " ".join(requested.strip().split())[:18] or "Runner"
@@ -160,6 +214,9 @@ class GameRoom:
                 -p.distance,
             ),
         )
+        now = time.monotonic()
+        leader_distance = max((p.distance for p in ranking), default=0.0)
+        effects_by_player = {p.id: self._effects_payload(p, now) for p in ranking}
         return {
             "type": "state",
             "state": "finished" if self.status == "finished" else "racing",
@@ -169,7 +226,7 @@ class GameRoom:
                 p.id: {
                     "name": p.name,
                     "distance": p.distance,
-                    "speed": p.speed,
+                    "speed": round(self._effective_speed(p, leader_distance, now), 2),
                     "color": p.color,
                     "lane": p.lane,
                     "finished": p.id in self.finish_order,
@@ -177,6 +234,13 @@ class GameRoom:
                     "finishPlace": p.finish_place,
                     "topSpeed": p.top_speed,
                     "taps": p.tap_count,
+                    "heat": int(round(p.heat)),
+                    "zone": self._heat_zone(p.heat),
+                    "overheated": now < p.overheated_until,
+                    "overheatedRemaining": round(max(0.0, p.overheated_until - now), 2),
+                    "timesOverheated": p.times_overheated,
+                    "item": p.item,
+                    "activeEffects": effects_by_player[p.id],
                     "finishTime": round(p.finish_time, 2) if p.finish_time is not None else None,
                     "dnf": p.id not in self.finish_order and self.status == "finished",
                 }
@@ -218,6 +282,8 @@ class GameRoom:
                     ),
                     "topSpeed": round(player.top_speed, 2),
                     "taps": player.tap_count,
+                    "timesOverheated": player.times_overheated,
+                    "itemsUsed": player.items_used,
                     "dnf": player.finish_place is None,
                     "distance": round(player.distance, 2),
                     "color": player.color,
@@ -263,6 +329,9 @@ class GameRoom:
         self.result_saved = False
         self.finish_order.clear()
         self.winner = None
+        self.race_seed = secrets.randbits(32)
+        self.item_boxes = self._generate_item_boxes(self.race_seed ^ 0x5A17, self.race_distance)
+        self._item_random.seed(self.race_seed ^ 0xD1B54A35)
         for player in self.players.values():
             player.distance = 0.0
             player.speed = 0.0
@@ -272,6 +341,21 @@ class GameRoom:
             player.tap_count = 0
             player.tap_times.clear()
             player.accepted_taps.clear()
+            player.heat = 0.0
+            player.overheated_until = 0.0
+            player.times_overheated = 0
+            player.item = None
+            player.used_box_indices.clear()
+            player.active_effects.clear()
+            player.heat_locked_until = 0.0
+            player.items_used = 0
+        await self.send_to_all({
+            "type": "raceStart",
+            "seed": self.race_seed,
+            "itemBoxes": self.item_boxes,
+            "raceDistance": self.race_distance,
+            "theme": self.theme,
+        })
         self.game_task = asyncio.create_task(self._run_race())
 
     async def _run_race(self) -> None:
@@ -292,7 +376,15 @@ class GameRoom:
                 frame_start = time.monotonic()
                 dt = min(frame_start - previous, 0.1)
                 previous = frame_start
+                leader_distance = max(
+                    (runner.distance for runner in self.players.values()),
+                    default=0.0,
+                )
+                item_events: list[dict[str, Any]] = []
                 for player in list(self.players.values()):
+                    self._update_heat(player, dt, frame_start)
+                    if self.race_distance - player.distance <= RACE_CONFIG["final_sprint_distance"]:
+                        player.overheated_until = 0.0
                     old_distance = player.distance
                     player.speed -= player.speed * DRAG * dt
                     player.speed = max(0.0, player.speed)
@@ -300,7 +392,9 @@ class GameRoom:
                         player.speed = max(0.0, player.speed - 3.8 * dt)
                         player.distance += player.speed * dt
                         continue
-                    new_distance = player.distance + player.speed * dt
+                    effective_speed = self._effective_speed(player, leader_distance, frame_start)
+                    new_distance = player.distance + effective_speed * dt
+                    item_events.extend(self._pickup_item_boxes(player, old_distance, new_distance, frame_start))
                     if new_distance >= self.race_distance:
                         distance_covered = new_distance - old_distance
                         fraction = (
@@ -319,7 +413,9 @@ class GameRoom:
                             self.winner = player.id
                     else:
                         player.distance = new_distance
-                    player.top_speed = max(player.top_speed, player.speed)
+                    player.top_speed = max(player.top_speed, effective_speed)
+                for event in item_events:
+                    await self.send_to_all(event)
 
                 all_finished = len(self.finish_order) == len(self.race_players)
                 timed_out = (
@@ -346,6 +442,12 @@ class GameRoom:
         if player is None or self.status != "racing" or player.id in self.finish_order:
             return False
         now = time.monotonic()
+        self._update_heat(player, 0.0, now)
+        final_sprint = self.race_distance - player.distance <= RACE_CONFIG["final_sprint_distance"]
+        if final_sprint:
+            player.overheated_until = 0.0
+        if now < player.overheated_until:
+            return False
         while player.tap_times and now - player.tap_times[0] >= 1:
             player.tap_times.pop(0)
         if len(player.tap_times) >= MAX_TAPS_PER_SEC:
@@ -361,13 +463,200 @@ class GameRoom:
             recent = intervals[-4:]
             mean = statistics.mean(recent)
             if mean > 0 and statistics.pvariance(recent) / (mean * mean) < 0.08:
-                multiplier = 1.3
+                multiplier = RACE_CONFIG["rhythm_tap_multiplier"]
         player.accepted_taps.append(now)
         player.accepted_taps = player.accepted_taps[-6:]
         player.tap_count += 1
+        sweet = RACE_CONFIG["heat_sweet_min"] <= player.heat <= RACE_CONFIG["heat_sweet_max"]
+        if final_sprint:
+            multiplier = max(multiplier, RACE_CONFIG["final_sprint_tap_multiplier"])
+        elif sweet:
+            multiplier *= RACE_CONFIG["heat_sweet_tap_multiplier"]
+        multiplier = min(multiplier, RACE_CONFIG["tap_multiplier_cap"])
         player.speed = min(player.speed + TAP_BOOST * multiplier, MAX_SPEED)
+        if not final_sprint and now >= player.heat_locked_until:
+            player.heat = min(
+                float(RACE_CONFIG["heat_overheat_threshold"]),
+                player.heat + RACE_CONFIG["heat_per_tap"],
+            )
+            if player.heat >= RACE_CONFIG["heat_overheat_threshold"]:
+                player.overheated_until = now + RACE_CONFIG["heat_overheat_seconds"]
+                player.times_overheated += 1
+        if now >= player.heat_locked_until:
+            player.heat_locked_until = 0.0
         player.top_speed = max(player.top_speed, player.speed)
         return True
+
+    @staticmethod
+    def _heat_zone(heat: float) -> str:
+        if heat < RACE_CONFIG["heat_sweet_min"]:
+            return "cold"
+        if heat <= RACE_CONFIG["heat_sweet_max"]:
+            return "sweet"
+        return "hot"
+
+    @staticmethod
+    def _update_heat(player: Player, dt: float, now: float) -> None:
+        if now >= player.overheated_until:
+            if player.overheated_until:
+                player.heat = float(RACE_CONFIG["heat_overheat_reset"])
+                player.overheated_until = 0.0
+            else:
+                player.heat = max(0.0, player.heat - RACE_CONFIG["heat_cool_per_second"] * dt)
+
+    @staticmethod
+    def _effective_speed(player: Player, leader_distance: float, now: float) -> float:
+        speed = player.speed
+        for name, (expires_at, multiplier) in list(player.active_effects.items()):
+            if expires_at <= now:
+                player.active_effects.pop(name, None)
+                continue
+            speed *= multiplier
+        if now < player.overheated_until:
+            speed *= RACE_CONFIG["heat_overheat_speed_multiplier"]
+        if RACE_CONFIG["RUBBER_BAND"] and leader_distance - player.distance > RACE_CONFIG["rubber_band_start_gap"]:
+            gap = leader_distance - player.distance - RACE_CONFIG["rubber_band_start_gap"]
+            strength = min(RACE_CONFIG["rubber_band_max_strength"], gap * 0.001)
+            speed *= 1 + strength
+        return speed
+
+    @staticmethod
+    def _effects_payload(player: Player, now: float) -> list[dict[str, Any]]:
+        effects = []
+        for name, (expires_at, _) in list(player.active_effects.items()):
+            if expires_at <= now:
+                player.active_effects.pop(name, None)
+            else:
+                effects.append({"name": name, "remaining": round(expires_at - now, 2)})
+        return effects
+
+    @staticmethod
+    def _generate_item_boxes(seed: int, distance: int) -> list[dict[str, Any]]:
+        generator = random.Random(seed)
+        count = max(1, round(distance / 400 * RACE_CONFIG["item_boxes_per_lane_per_400m"]))
+        boxes = []
+        box_index = 0
+        for lane in range(len(PALETTE)):
+            for index in range(count):
+                progress = (index + generator.uniform(0.12, 0.88)) / count
+                boxes.append({
+                    "index": box_index,
+                    "lane": lane,
+                    "distance": round(
+                        distance * RACE_CONFIG["item_box_first_half_bias"] * progress,
+                        2,
+                    ),
+                })
+                box_index += 1
+        return boxes
+
+    def _pickup_item_boxes(
+        self,
+        player: Player,
+        old_distance: float,
+        new_distance: float,
+        now: float,
+    ) -> list[dict[str, Any]]:
+        events = []
+        for box in self.item_boxes:
+            index = box["index"]
+            if box["lane"] != player.lane or index in player.used_box_indices:
+                continue
+            if not old_distance < box["distance"] <= new_distance:
+                continue
+            player.used_box_indices.add(index)
+            if player.item is not None:
+                continue
+            player.item = self._weighted_item_for(player)
+            events.append({
+                "type": "itemPickedUp",
+                "id": player.id,
+                "boxIndex": index,
+                "item": player.item,
+            })
+        return events
+
+    def _weighted_item_for(self, player: Player) -> str:
+        ranking = sorted(self.players.values(), key=lambda runner: runner.distance, reverse=True)
+        position = ranking.index(player)
+        if position == len(ranking) - 1:
+            weights = RACE_CONFIG["item_weights_last"]
+        elif position == 0:
+            weights = RACE_CONFIG["item_weights_leader"]
+        else:
+            weights = RACE_CONFIG["item_weights_middle"]
+        names = [name for name, weight in weights.items() if weight > 0]
+        values = [weights[name] for name in names]
+        return self._item_random.choices(names, weights=values, k=1)[0]
+
+    @staticmethod
+    def _apply_negative_effect(
+        target: Player,
+        name: str,
+        multiplier: float,
+        duration: float,
+        now: float,
+    ) -> bool:
+        GameRoom._effects_payload(target, now)
+        if "SHIELD" in target.active_effects:
+            target.active_effects.pop("SHIELD", None)
+            return False
+        target.active_effects[name] = (now + duration, multiplier)
+        return True
+
+    def use_item(self, player_id: str) -> dict[str, Any]:
+        player = self.players.get(player_id)
+        if player is None:
+            raise ValueError("Join the race before using an item.")
+        if self.status != "racing" or player.id in self.finish_order:
+            raise ValueError("Items can only be used during a race.")
+        if time.monotonic() < player.overheated_until:
+            raise ValueError("Cool down before using an item.")
+        if player.item is None:
+            raise ValueError("You don't have an item to use.")
+
+        now = time.monotonic()
+        item = player.item
+        if item not in {"BOOST", "SHIELD", "ROCKET"}:
+            raise ValueError("That item is not available.")
+        ahead = []
+        if item == "ROCKET":
+            ahead = [
+                runner for runner in self.players.values()
+                if runner.id != player.id
+                and runner.id not in self.finish_order
+                and runner.distance > player.distance
+            ]
+            if not ahead:
+                raise ValueError("There is no runner ahead to target.")
+
+        targets: list[str] = []
+        player.item = None
+        player.items_used += 1
+        if item == "BOOST":
+            player.active_effects["BOOST"] = (
+                now + RACE_CONFIG["boost_seconds"],
+                RACE_CONFIG["boost_multiplier"],
+            )
+        elif item == "SHIELD":
+            player.active_effects["SHIELD"] = (now + RACE_CONFIG["shield_seconds"], 1.0)
+        elif item == "ROCKET":
+            target = min(ahead, key=lambda runner: runner.distance - player.distance)
+            if self._apply_negative_effect(
+                target,
+                "ROCKET",
+                RACE_CONFIG["rocket_multiplier"],
+                RACE_CONFIG["rocket_seconds"],
+                now,
+            ):
+                targets.append(target.id)
+        return {
+            "type": "itemUsed",
+            "id": player.id,
+            "sourceName": player.name,
+            "item": item,
+            "targetIds": targets,
+        }
 
     async def leave_player(self, player_id: str) -> bool:
         player = self.players.get(player_id)
@@ -427,6 +716,7 @@ class GameRoom:
         self.first_finish_at = None
         self.results_sent = False
         self.result_saved = False
+        self.item_boxes.clear()
         for player in self.players.values():
             player.distance = 0.0
             player.speed = 0.0
@@ -436,4 +726,12 @@ class GameRoom:
             player.tap_count = 0
             player.tap_times.clear()
             player.accepted_taps.clear()
+            player.heat = 0.0
+            player.overheated_until = 0.0
+            player.times_overheated = 0
+            player.item = None
+            player.used_box_indices.clear()
+            player.active_effects.clear()
+            player.heat_locked_until = 0.0
+            player.items_used = 0
         await self.send_to_all(self.lobby_payload())

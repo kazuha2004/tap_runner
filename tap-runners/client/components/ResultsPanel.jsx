@@ -56,6 +56,9 @@ export default function ResultsPanel({
                     <small className="result-mobile-stats">
                       {(player.avgSpeed * 3.6).toFixed(1)} avg - {(player.topSpeed * 3.6).toFixed(1)} top - {player.taps} taps
                     </small>
+                    <small className="result-power-stats">
+                      {player.timesOverheated || 0} overheats · {player.itemsUsed || 0} items used
+                    </small>
                   </td>
                   <td>{player.time === null ? "—" : `${player.time.toFixed(2)}s`}</td>
                   <td>{(player.avgSpeed * 3.6).toFixed(1)} km/h</td>

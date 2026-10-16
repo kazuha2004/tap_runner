@@ -21,7 +21,7 @@ from database import (
     initialize_database,
     recent_race_results,
 )
-from game import GameRoom
+from game import GameRoom, RACE_CONFIG
 
 rooms: dict[str, GameRoom] = {}
 rooms_lock = asyncio.Lock()
@@ -62,6 +62,16 @@ app.add_middleware(
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "database": database_status()}
+
+@app.get("/config")
+async def get_game_config() -> dict[str, Any]:
+    development = (
+        os.getenv("ENVIRONMENT", "").lower() == "development"
+        or os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}
+    )
+    if not development:
+        raise HTTPException(status_code=404, detail="Not found.")
+    return {"race": RACE_CONFIG}
 
 
 @app.get("/races")
@@ -148,6 +158,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     room.tap(player_id)
                 elif action == "start":
                     await room.start(player_id)
+                elif action == "useItem":
+                    await room.send_to_all(room.use_item(player_id))
                 elif action == "setDistance":
                     room.set_race_distance(player_id, message.get("meters"))
                     await broadcast_lobby(room)

@@ -292,7 +292,7 @@ export function createCrowd(root, positions, colors, options = {}) {
 function simplifyGeometry(geometry) {
   const quality = getSceneQuality();
   if (quality.id === "HIGH") return geometry;
-  const scale = quality.id === "MEDIUM" ? 0.65 : 0.4;
+  const scale = quality.id === "MEDIUM" ? 0.8 : 0.65;
   const params = geometry.parameters || {};
   let simplified = geometry;
   if (geometry.type === "SphereGeometry") {

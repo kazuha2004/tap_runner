@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
-import { playTone } from "../lib/audio";
+import { memo, useEffect, useRef, useState } from "react";
+import { playTone, playToneSequence } from "../lib/audio";
 
 const ordinal = (value) => {
   const mod10 = value % 10;
@@ -18,6 +18,11 @@ function HUD({
   onTap,
   muted,
   tapDisabled = false,
+  onUseItem,
+  debugEnabled = false,
+  itemBoxes = [],
+  debugConfig,
+  debugConfigError,
 }) {
   const hudRef = useRef(null);
   const mapRef = useRef(null);
@@ -26,12 +31,24 @@ function HUD({
   const tapAnimationsRef = useRef([]);
   const nextTapPopupRef = useRef(0);
   const lastCountdown = useRef(null);
+  const tapDisabledRef = useRef(tapDisabled);
+  const localStorageCheckedRef = useRef(false);
+  const previousZoneRef = useRef(null);
+  const previousOverheatedRef = useRef(false);
+  const previousTapCountRef = useRef(0);
+  const tutorialTimerRef = useRef(null);
+  const overheatedRef = useRef(false);
+  const itemAvailableRef = useRef(false);
+  const onUseItemRef = useRef(onUseItem);
+  const [showTutorial, setShowTutorial] = useState(false);
   const local = state?.players?.[me?.id];
   const ordered = state?.ranking?.map((id) => [id, state.players[id]]).filter(([, player]) => player) ||
     Object.entries(state?.players || {}).sort((a, b) => (b[1].distance || 0) - (a[1].distance || 0));
   const position = Math.max(1, ordered.findIndex(([id]) => id === me?.id) + 1);
   const speed = local?.speed || 0;
   const distanceLeft = Math.max(0, (state?.raceDistance || 400) - (local?.distance || 0));
+  tapDisabledRef.current = tapDisabled;
+  onUseItemRef.current = onUseItem;
 
   useEffect(() => {
     if (!stateSnapshotRef) return undefined;
@@ -48,6 +65,70 @@ function HUD({
       const countNode = hudRef.current?.querySelector("[data-hud-count]");
       const paceNode = hudRef.current?.querySelector("[data-hud-pace]");
       const speedBar = hudRef.current?.querySelector("[data-hud-speed-bar]");
+      const heatWidget = hudRef.current?.querySelector("[data-heat-widget]");
+      const heatValue = Math.max(0, Math.min(100, localPlayer?.heat || 0));
+      const overheated = Boolean(localPlayer?.overheated);
+      overheatedRef.current = overheated;
+      const zone = localPlayer?.zone || "cold";
+      const tapButton = hudRef.current?.querySelector("[data-tap-button]");
+      const itemButton = hudRef.current?.querySelector("[data-item-button]");
+      if (heatWidget) {
+        heatWidget.dataset.zone = zone;
+        heatWidget.dataset.overheated = String(overheated);
+        heatWidget.dataset.warning = String(heatValue > 85);
+        heatWidget.style.setProperty("--heat-level", `${heatValue}%`);
+        const heatText = heatWidget.querySelector("[data-heat-value]");
+        if (heatText) heatText.textContent = `${Math.round(heatValue)}%`;
+        const coolingText = heatWidget.querySelector("[data-cooling-countdown]");
+        const zoneBadge = heatWidget.querySelector("[data-zone-badge]");
+        if (zoneBadge) zoneBadge.hidden = zone !== "sweet" || overheated;
+        if (coolingText) {
+          coolingText.textContent = overheated
+            ? `${Math.max(0, (Number(localPlayer.overheatedRemaining) || 0)).toFixed(1)}s`
+            : "";
+        }
+      }
+      if (tapButton) {
+        tapButton.disabled = tapDisabledRef.current || overheated;
+        tapButton.dataset.overheated = String(overheated);
+        tapButton.style.setProperty(
+          "--cooldown-progress",
+          `${Math.min(100, Math.max(0, (localPlayer?.overheatedRemaining || 0) / 1.5 * 100))}%`,
+        );
+      }
+      itemAvailableRef.current = Boolean(localPlayer?.item) && !overheated;
+      if (itemButton) {
+        itemButton.disabled = tapDisabledRef.current || !itemAvailableRef.current;
+        itemButton.dataset.item = localPlayer?.item || "";
+        const itemName = itemButton.querySelector("[data-item-name]");
+        if (itemName) itemName.textContent = localPlayer?.item
+          ? localPlayer.item.replaceAll("_", " ")
+          : "EMPTY";
+        itemButton.setAttribute("aria-label", localPlayer?.item
+          ? `Use ${localPlayer.item.replaceAll("_", " ")}`
+          : "No item held");
+      }
+      if (previousZoneRef.current !== zone && zone === "sweet" && !muted) {
+        playTone(880, 0.12, "sine");
+      }
+      if (!previousOverheatedRef.current && overheated && !muted) {
+        playTone(145, 0.35, "square");
+      }
+      if (zone === "sweet" && (localPlayer?.taps || 0) > previousTapCountRef.current && !muted) {
+        playTone(660, 0.045, "sine", true);
+      }
+      previousZoneRef.current = zone;
+      previousOverheatedRef.current = overheated;
+      previousTapCountRef.current = localPlayer?.taps || 0;
+
+      if (!localStorageCheckedRef.current && snapshot?.state === "racing") {
+        localStorageCheckedRef.current = true;
+        if (!window.localStorage.getItem("tap-runners-heat-tutorial-seen")) {
+          window.localStorage.setItem("tap-runners-heat-tutorial-seen", "1");
+          setShowTutorial(true);
+          tutorialTimerRef.current = window.setTimeout(() => setShowTutorial(false), 6000);
+        }
+      }
       if (distanceNode) {
         distanceNode.textContent = String(Math.ceil(Math.max(0, (snapshot?.raceDistance || 400) - (localPlayer?.distance || 0))));
       }
@@ -62,6 +143,7 @@ function HUD({
         const player = snapshotPlayers[dot.dataset.runnerId];
         if (!player) return;
         dot.style.left = `${Math.min(100, Math.max(0, (player.distance || 0) / (snapshot?.raceDistance || 200) * 100))}%`;
+        dot.dataset.holdsItem = String(Boolean(player.item));
       });
       const leaderboard = leaderboardRef.current;
       if (leaderboard) {
@@ -78,12 +160,37 @@ function HUD({
           const speedNode = row.querySelector("[data-runner-speed]");
           if (rankNode) rankNode.textContent = String(index + 1).padStart(2, "0");
           if (speedNode) speedNode.textContent = player.id === me?.id ? "YOU" : `${Math.round((player.speed || 0) * 100)} SPD`;
+          row.dataset.holdsItem = String(Boolean(player.item));
           leaderboard.appendChild(row);
         });
       }
+      if (debugEnabled) {
+        const debugNode = hudRef.current?.querySelector("[data-debug-state]");
+        if (debugNode) {
+          debugNode.textContent = Object.entries(snapshotPlayers)
+            .map(([id, player]) => `${player.name || id}: ${Math.round(player.heat || 0)} ${player.zone || "cold"}`)
+            .join(" · ");
+        }
+      }
     }, 100);
-    return () => clearInterval(timer);
-  }, [me?.id, players.length, stateSnapshotRef]);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(tutorialTimerRef.current);
+    };
+  }, [debugEnabled, me?.id, muted, players.length, stateSnapshotRef]);
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if ((event.key.toLowerCase() !== "e" && event.key !== "Enter") || event.repeat) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (event.target instanceof HTMLButtonElement && !event.target.hasAttribute("data-item-button")) return;
+      if (tapDisabledRef.current || overheatedRef.current || !itemAvailableRef.current) return;
+      event.preventDefault();
+      onUseItemRef.current?.();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (countdown !== null && countdown !== lastCountdown.current && !muted) {
@@ -96,7 +203,7 @@ function HUD({
     function onKeyDown(event) {
       if (event.code !== "Space" || event.repeat || event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
       event.preventDefault();
-      if (tapDisabled) return;
+      if (tapDisabledRef.current || overheatedRef.current) return;
       onTap();
       if (!muted) playTone(190, 0.07, "square", true);
     }
@@ -106,7 +213,7 @@ function HUD({
 
   function tap(event) {
     event.preventDefault();
-    if (tapDisabled) return;
+    if (tapDisabledRef.current || overheatedRef.current || tapDisabled) return;
     onTap();
     const index = nextTapPopupRef.current;
     nextTapPopupRef.current = (index + 1) % tapPopupsRef.current.length;
@@ -150,8 +257,17 @@ function HUD({
         <div className="leaderboard-title"><span>THE PACK</span><i>LIVE</i></div>
         {(ordered.length ? ordered : players.map((player) => [player.id, player])).slice(0, 5).map(([id, player], index) => <div className={`leader-row ${id === me?.id ? "is-you" : ""}`} key={id} data-runner-id={id}><b data-rank>{String(index + 1).padStart(2, "0")}</b><i style={{ background: player.color }} /><span>{player.name}</span><small data-runner-speed>{id === me?.id ? "YOU" : `${Math.round((player.speed || 0) * 100)} SPD`}</small></div>)}
       </div>
+      <div className="heat-widget" data-heat-widget data-zone={local?.zone || "cold"} data-overheated="false" aria-label="Runner heat">
+        <div className="heat-heading"><b data-heat-label>HEAT</b><span data-heat-value>{Math.round(local?.heat || 0)}%</span><span className="heat-warning">▲</span></div>
+        <div className="heat-track"><i className="heat-zone-cold" /><i className="heat-zone-sweet" /><i className="heat-zone-hot" /><b className="heat-marker" /></div>
+        <strong className="zone-badge" data-zone-badge hidden>IN THE ZONE!</strong>
+        <strong className="heat-message" data-cooling-countdown />
+      </div>
+      {debugEnabled && <aside className="race-debug-panel"><b>DEBUG</b><span data-debug-state>Heat waiting for race state</span><small>Boxes: {itemBoxes.map((box) => `${box.lane + 1}:${box.distance}m`).join(", ") || "not generated"}</small><small>Odds: {JSON.stringify(debugConfig?.item_weights_last || "unavailable")}</small>{debugConfigError && <small>{debugConfigError}</small>}</aside>}
+      {showTutorial && <div className="heat-tutorial" role="status">Tap in a steady rhythm. Don't mash!<span aria-hidden="true">↘</span></div>}
       {countdown !== null && <div className={`countdown-overlay ${countdown === "GO" ? "go" : ""}`}><div>{countdown}</div><span>{countdown === "GO" ? "MAKE YOUR MOVE" : "GET READY"}</span></div>}
-      <button className="tap-button" onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="tap-caption">TAP TO</span><strong>TAP</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
+      <button className="tap-button" data-tap-button onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="overheat-label" aria-hidden="true">COOLING DOWN...</span><span className="tap-caption">TAP TO</span><strong>TAP</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
+      <button className="item-button" data-item-button data-item="" onPointerDown={(event) => { event.preventDefault(); if (itemAvailableRef.current && !tapDisabledRef.current && !overheatedRef.current) onUseItemRef.current?.(); }} disabled aria-label="No item held"><svg viewBox="0 0 32 32" aria-hidden="true"><path className="item-icon-boost" d="M18 2 7 18h7l-1 12 12-17h-8z" /><path className="item-icon-shield" d="M16 3 5 7v8c0 7 5 11 11 14 6-3 11-7 11-14V7z" /><path className="item-icon-rocket" d="M27 4c-7 0-13 3-17 9l-4 6 7 7 6-4c6-4 9-10 8-18zM10 22l-4 6 7-2m1-9h.01" /><path className="item-icon-empty" d="M7 7h18v18H7zM11 11h10v10H11z" /></svg><span className="item-button-title">ITEM</span><strong data-item-name>EMPTY</strong><small>PRESS E</small></button>
       <div className="game-bottom-hint"><span>✳</span> KEEP YOUR RHYTHM TO BUILD A BONUS <span className="desktop-hint">· SPACE TO TAP</span></div>
     </div>
   );
