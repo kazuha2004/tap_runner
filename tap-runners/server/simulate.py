@@ -20,6 +20,7 @@ def run_trial(seed: int, distance: int) -> dict[str, float]:
     room.started_at = 100.0
     room.race_seed = seed
     room.item_boxes = room._generate_item_boxes(seed ^ 0x5A17, distance)
+    room.boost_pads = room._generate_boost_pads(seed ^ 0x4193, distance)
     room._item_random.seed(seed ^ 0xD1B54A35)
     strategies = ("masher", "steady", "random")
     for index, strategy in enumerate(strategies):
@@ -59,6 +60,7 @@ def run_trial(seed: int, distance: int) -> dict[str, float]:
                 old_distance = player.distance
                 new_distance = old_distance + speed * tick
                 room._pickup_item_boxes(player, old_distance, new_distance, now)
+                room._hit_boost_pads(player, old_distance, new_distance, now)
                 rocket_has_target = player.item != "ROCKET" or any(
                     runner.id != player.id
                     and runner.id not in room.finish_order
@@ -78,6 +80,7 @@ def run_trial(seed: int, distance: int) -> dict[str, float]:
                 if player.distance >= distance:
                     player.finish_place = len(finish_times) + 1
                     finish_times[name] = now - 100.0
+            room._advance_rockets(tick, now)
             clock[0] += tick
     return finish_times
 

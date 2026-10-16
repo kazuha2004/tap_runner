@@ -5,6 +5,12 @@ export const metadata = {
   description: "A colorful multiplayer tap-racing game. Make every tap count.",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en">

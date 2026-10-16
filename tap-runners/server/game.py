@@ -33,27 +33,68 @@ RACE_CONFIG = {
     "RUBBER_BAND": True,
     "rubber_band_start_gap": 15.0,
     "rubber_band_max_strength": 0.08,
-    # Item boxes grant only boost, shield, or rocket; weights favor racers behind.
+    # Item boxes and pads are generated from the race seed and simulated by the server.
     "item_boxes_per_lane_per_400m": 4,
     "item_box_first_half_bias": 0.62,
-    "boost_multiplier": 1.4,
-    "boost_seconds": 2.5,
+    "item_pickup_radius": 0.6,
+    "lane_width": 1.2,
+    "turbo_multiplier": 1.4,
+    "turbo_seconds": 2.5,
     "shield_seconds": 6.0,
-    "rocket_multiplier": 0.6,
-    "rocket_seconds": 2.0,
+    "slow_trap_multiplier": 0.6,
+    "slow_trap_seconds": 2.0,
+    "cool_down_seconds": 3.0,
+    "magnet_pad_charges": 2,
+    "lightning_multiplier": 0.8,
+    "lightning_seconds": 1.5,
+    "lightning_stun_seconds": 0.6,
+    "pad_min_spacing": 40,
+    "pad_max_spacing": 60,
+    "pad_start_exclusion": 20,
+    "pad_finish_exclusion": 15,
+    "pad_lane_offset": 3.5,
+    "pad_perfect_multiplier": 1.5,
+    "pad_perfect_seconds": 1.2,
+    "pad_ok_multiplier": 1.15,
+    "pad_ok_seconds": 0.6,
+    "max_rocket_range": 80.0,
+    "rocket_speed_multiplier": 1.8,
+    "rocket_min_speed": 22.0,
+    "rocket_lifetime": 4.0,
+    "rocket_no_target_lifetime": 3.0,
+    "rocket_lane_turn_rate": 2.0,
+    "rocket_hit_lane_gap": 0.6,
+    "knockdown_time": 1.6,
+    "getup_time": 0.5,
+    "knockdown_speed_multiplier": 0.15,
+    "getup_speed_multiplier": 0.6,
+    "knockback_distance": 1.5,
+    "stun_immunity_seconds": 1.0,
     "item_weights_leader": {
-        "BOOST": 2,
+        "TURBO": 2,
         "SHIELD": 2,
-        "ROCKET": 1,
+        "SLOW_TRAP": 1,
+        "COOL_DOWN": 2,
+        "MAGNET": 1,
+        "LIGHTNING": 0,
+        "ROCKET": 0,
     },
     "item_weights_middle": {
-        "BOOST": 2,
+        "TURBO": 2,
         "SHIELD": 2,
-        "ROCKET": 2,
+        "SLOW_TRAP": 2,
+        "COOL_DOWN": 1,
+        "MAGNET": 1,
+        "LIGHTNING": 1,
+        "ROCKET": 1,
     },
     "item_weights_last": {
-        "BOOST": 2,
+        "TURBO": 2,
         "SHIELD": 2,
+        "SLOW_TRAP": 2,
+        "COOL_DOWN": 1,
+        "MAGNET": 1,
+        "LIGHTNING": 2,
         "ROCKET": 3,
     },
     "tick_rate": 30,
@@ -111,6 +152,13 @@ class Player:
     active_effects: dict[str, tuple[float, float]] = field(default_factory=dict)
     heat_locked_until: float = 0.0
     items_used: int = 0
+    used_pad_indices: set[int] = field(default_factory=set)
+    stunned_until: float = 0.0
+    getup_until: float = 0.0
+    stun_immunity_until: float = 0.0
+    magnet_charges: int = 0
+    perfect_pads: int = 0
+    pads_hit: int = 0
 
 
 class GameRoom:
@@ -133,6 +181,8 @@ class GameRoom:
         self.result_saved = False
         self.race_seed = 0
         self.item_boxes: list[dict[str, Any]] = []
+        self.boost_pads: list[dict[str, Any]] = []
+        self.rockets: dict[str, dict[str, Any]] = {}
         self._item_random = random.Random()
 
     def unique_name(self, requested: str) -> str:
@@ -185,6 +235,12 @@ class GameRoom:
 
     def remove_player(self, player_id: str) -> bool:
         self.players.pop(player_id, None)
+        for rocket in self.rockets.values():
+            if rocket["ownerId"] == player_id:
+                rocket["ownerId"] = ""
+            if rocket["targetId"] == player_id:
+                rocket["targetId"] = None
+                rocket["noTargetAge"] = 0.0
         if not self.players:
             self.host = None
             return True
@@ -217,6 +273,12 @@ class GameRoom:
         now = time.monotonic()
         leader_distance = max((p.distance for p in ranking), default=0.0)
         effects_by_player = {p.id: self._effects_payload(p, now) for p in ranking}
+        for player in ranking:
+            if player.magnet_charges:
+                effects_by_player[player.id].append({
+                    "name": "MAGNET",
+                    "remaining": player.magnet_charges,
+                })
         return {
             "type": "state",
             "state": "finished" if self.status == "finished" else "racing",
@@ -241,11 +303,27 @@ class GameRoom:
                     "timesOverheated": p.times_overheated,
                     "item": p.item,
                     "activeEffects": effects_by_player[p.id],
+                    "shield": "SHIELD" in p.active_effects,
+                    "stunned": now < p.stunned_until,
+                    "stunRemaining": round(max(0.0, p.stunned_until - now), 2),
+                    "getupRemaining": round(max(0.0, p.getup_until - now), 2),
                     "finishTime": round(p.finish_time, 2) if p.finish_time is not None else None,
                     "dnf": p.id not in self.finish_order and self.status == "finished",
                 }
                 for p in ranking
             },
+            "rockets": [
+                {
+                    "id": rocket["id"],
+                    "ownerId": rocket["ownerId"],
+                    "lane": round(rocket["lane"], 2),
+                    "distance": round(rocket["distance"], 2),
+                    "speed": round(rocket["speed"], 2),
+                    "targetId": rocket["targetId"],
+                    "age": round(rocket["age"], 2),
+                }
+                for rocket in self.rockets.values()
+            ],
             "winner": self.winner,
             "ranking": [p.id for p in ranking],
             "dnfIn": (
@@ -284,6 +362,8 @@ class GameRoom:
                     "taps": player.tap_count,
                     "timesOverheated": player.times_overheated,
                     "itemsUsed": player.items_used,
+                    "padsHit": player.pads_hit,
+                    "perfectPads": player.perfect_pads,
                     "dnf": player.finish_place is None,
                     "distance": round(player.distance, 2),
                     "color": player.color,
@@ -331,6 +411,8 @@ class GameRoom:
         self.winner = None
         self.race_seed = secrets.randbits(32)
         self.item_boxes = self._generate_item_boxes(self.race_seed ^ 0x5A17, self.race_distance)
+        self.boost_pads = self._generate_boost_pads(self.race_seed ^ 0x4193, self.race_distance)
+        self.rockets.clear()
         self._item_random.seed(self.race_seed ^ 0xD1B54A35)
         for player in self.players.values():
             player.distance = 0.0
@@ -349,10 +431,18 @@ class GameRoom:
             player.active_effects.clear()
             player.heat_locked_until = 0.0
             player.items_used = 0
+            player.used_pad_indices.clear()
+            player.stunned_until = 0.0
+            player.getup_until = 0.0
+            player.stun_immunity_until = 0.0
+            player.magnet_charges = 0
+            player.perfect_pads = 0
+            player.pads_hit = 0
         await self.send_to_all({
             "type": "raceStart",
             "seed": self.race_seed,
             "itemBoxes": self.item_boxes,
+            "boostPads": self.boost_pads,
             "raceDistance": self.race_distance,
             "theme": self.theme,
         })
@@ -382,7 +472,17 @@ class GameRoom:
                 )
                 item_events: list[dict[str, Any]] = []
                 for player in list(self.players.values()):
+                    shield = player.active_effects.get("SHIELD")
+                    if shield and shield[0] <= frame_start:
+                        player.active_effects.pop("SHIELD", None)
+                        item_events.append({
+                            "type": "shieldPopped",
+                            "id": player.id,
+                            "reason": "expired",
+                        })
+                for player in list(self.players.values()):
                     self._update_heat(player, dt, frame_start)
+                    self._update_stun_state(player, frame_start)
                     if self.race_distance - player.distance <= RACE_CONFIG["final_sprint_distance"]:
                         player.overheated_until = 0.0
                     old_distance = player.distance
@@ -395,6 +495,7 @@ class GameRoom:
                     effective_speed = self._effective_speed(player, leader_distance, frame_start)
                     new_distance = player.distance + effective_speed * dt
                     item_events.extend(self._pickup_item_boxes(player, old_distance, new_distance, frame_start))
+                    item_events.extend(self._hit_boost_pads(player, old_distance, new_distance, frame_start))
                     if new_distance >= self.race_distance:
                         distance_covered = new_distance - old_distance
                         fraction = (
@@ -414,6 +515,8 @@ class GameRoom:
                     else:
                         player.distance = new_distance
                     player.top_speed = max(player.top_speed, effective_speed)
+                for event in self._advance_rockets(dt, frame_start):
+                    await self.send_to_all(event)
                 for event in item_events:
                     await self.send_to_all(event)
 
@@ -442,6 +545,9 @@ class GameRoom:
         if player is None or self.status != "racing" or player.id in self.finish_order:
             return False
         now = time.monotonic()
+        self._update_stun_state(player, now)
+        if now < player.stunned_until:
+            return False
         self._update_heat(player, 0.0, now)
         final_sprint = self.race_distance - player.distance <= RACE_CONFIG["final_sprint_distance"]
         if final_sprint:
@@ -514,11 +620,36 @@ class GameRoom:
             speed *= multiplier
         if now < player.overheated_until:
             speed *= RACE_CONFIG["heat_overheat_speed_multiplier"]
+        if now < player.stunned_until:
+            speed *= RACE_CONFIG["knockdown_speed_multiplier"]
+        elif now < player.getup_until:
+            speed *= RACE_CONFIG["getup_speed_multiplier"]
         if RACE_CONFIG["RUBBER_BAND"] and leader_distance - player.distance > RACE_CONFIG["rubber_band_start_gap"]:
             gap = leader_distance - player.distance - RACE_CONFIG["rubber_band_start_gap"]
             strength = min(RACE_CONFIG["rubber_band_max_strength"], gap * 0.001)
             speed *= 1 + strength
         return speed
+
+    @staticmethod
+    def _update_stun_state(player: Player, now: float) -> None:
+        if player.stunned_until and now >= player.stunned_until:
+            player.stunned_until = 0.0
+            player.getup_until = now + RACE_CONFIG["getup_time"]
+            player.stun_immunity_until = player.getup_until + RACE_CONFIG["stun_immunity_seconds"]
+        if player.getup_until and now >= player.getup_until:
+            player.getup_until = 0.0
+
+    @staticmethod
+    def _stun_player(player: Player, now: float, duration: float) -> bool:
+        GameRoom._update_stun_state(player, now)
+        if now < player.stun_immunity_until:
+            return False
+        player.stunned_until = now + duration
+        player.getup_until = 0.0
+        player.heat = 40.0
+        player.overheated_until = 0.0
+        player.distance = max(0.0, player.distance - RACE_CONFIG["knockback_distance"])
+        return True
 
     @staticmethod
     def _effects_payload(player: Player, now: float) -> list[dict[str, Any]]:
@@ -550,6 +681,37 @@ class GameRoom:
                 box_index += 1
         return boxes
 
+    @staticmethod
+    def _generate_boost_pads(seed: int, distance: int) -> list[dict[str, Any]]:
+        generator = random.Random(seed)
+        pads: list[dict[str, Any]] = []
+        index = 0
+        for lane in range(len(PALETTE)):
+            position = float(RACE_CONFIG["pad_start_exclusion"])
+            while position < distance - RACE_CONFIG["pad_finish_exclusion"]:
+                position += generator.uniform(
+                    RACE_CONFIG["pad_min_spacing"],
+                    RACE_CONFIG["pad_max_spacing"],
+                )
+                if position >= distance - RACE_CONFIG["pad_finish_exclusion"]:
+                    break
+                offset = generator.uniform(
+                    -RACE_CONFIG["pad_lane_offset"],
+                    RACE_CONFIG["pad_lane_offset"],
+                )
+                pad_distance = position + offset
+                if not RACE_CONFIG["pad_start_exclusion"] < pad_distance < (
+                    distance - RACE_CONFIG["pad_finish_exclusion"]
+                ):
+                    continue
+                pads.append({
+                    "index": index,
+                    "lane": lane,
+                    "distance": round(pad_distance, 2),
+                })
+                index += 1
+        return pads
+
     def _pickup_item_boxes(
         self,
         player: Player,
@@ -560,7 +722,8 @@ class GameRoom:
         events = []
         for box in self.item_boxes:
             index = box["index"]
-            if box["lane"] != player.lane or index in player.used_box_indices:
+            lane_gap = abs(box["lane"] - player.lane) * RACE_CONFIG["lane_width"]
+            if lane_gap > RACE_CONFIG["item_pickup_radius"] or index in player.used_box_indices:
                 continue
             if not old_distance < box["distance"] <= new_distance:
                 continue
@@ -569,7 +732,7 @@ class GameRoom:
                 continue
             player.item = self._weighted_item_for(player)
             events.append({
-                "type": "itemPickedUp",
+                "type": "boxPickup",
                 "id": player.id,
                 "boxIndex": index,
                 "item": player.item,
@@ -589,6 +752,50 @@ class GameRoom:
         values = [weights[name] for name in names]
         return self._item_random.choices(names, weights=values, k=1)[0]
 
+    def _hit_boost_pads(
+        self,
+        player: Player,
+        old_distance: float,
+        new_distance: float,
+        now: float,
+    ) -> list[dict[str, Any]]:
+        events = []
+        for pad in self.boost_pads:
+            index = pad["index"]
+            lane_gap = abs(pad["lane"] - player.lane) * RACE_CONFIG["lane_width"]
+            if lane_gap > RACE_CONFIG["item_pickup_radius"] or index in player.used_pad_indices:
+                continue
+            if not old_distance < pad["distance"] <= new_distance:
+                continue
+            player.used_pad_indices.add(index)
+            recent_sweet_tap = (
+                RACE_CONFIG["heat_sweet_min"] <= player.heat <= RACE_CONFIG["heat_sweet_max"]
+                and player.accepted_taps
+                and now - player.accepted_taps[-1] <= 0.5
+            )
+            perfect = player.magnet_charges > 0 or recent_sweet_tap
+            if player.magnet_charges > 0:
+                player.magnet_charges -= 1
+            if perfect:
+                player.active_effects["PAD"] = (
+                    now + RACE_CONFIG["pad_perfect_seconds"],
+                    RACE_CONFIG["pad_perfect_multiplier"],
+                )
+                player.perfect_pads += 1
+            else:
+                player.active_effects["PAD"] = (
+                    now + RACE_CONFIG["pad_ok_seconds"],
+                    RACE_CONFIG["pad_ok_multiplier"],
+                )
+            player.pads_hit += 1
+            events.append({
+                "type": "padHit",
+                "id": player.id,
+                "padIndex": index,
+                "quality": "perfect" if perfect else "ok",
+            })
+        return events
+
     @staticmethod
     def _apply_negative_effect(
         target: Player,
@@ -604,6 +811,77 @@ class GameRoom:
         target.active_effects[name] = (now + duration, multiplier)
         return True
 
+    def _advance_rockets(self, dt: float, now: float) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for rocket_id, rocket in list(self.rockets.items()):
+            rocket["age"] += dt
+            old_distance = rocket["distance"]
+            target = self.players.get(rocket["targetId"]) if rocket["targetId"] else None
+            if target is None or target.id in self.finish_order:
+                rocket["targetId"] = None
+                rocket["noTargetAge"] += dt
+                target = None
+            if target is not None:
+                delta = target.lane - rocket["lane"]
+                max_turn = RACE_CONFIG["rocket_lane_turn_rate"] * dt
+                rocket["lane"] += max(-max_turn, min(max_turn, delta))
+            rocket["distance"] += rocket["speed"] * dt
+            impact = None
+            impact_distance = float("inf")
+            for runner in self.players.values():
+                if runner.id == rocket["ownerId"] or runner.id in self.finish_order:
+                    continue
+                if not old_distance < runner.distance <= rocket["distance"] + 0.5:
+                    continue
+                lane_gap = abs(runner.lane - rocket["lane"]) * RACE_CONFIG["lane_width"]
+                if lane_gap < RACE_CONFIG["rocket_hit_lane_gap"] and runner.distance < impact_distance:
+                    impact = runner
+                    impact_distance = runner.distance
+            if impact is not None:
+                point = {
+                    "lane": round(rocket["lane"], 2),
+                    "distance": round(min(impact.distance, self.race_distance), 2),
+                }
+                if "SHIELD" in impact.active_effects and impact.active_effects["SHIELD"][0] > now:
+                    impact.active_effects.pop("SHIELD", None)
+                    events.append({"type": "shieldPopped", "id": impact.id, "reason": "rocket"})
+                    events.append({
+                        "type": "rocketBlocked",
+                        "rocketId": rocket_id,
+                        "targetId": impact.id,
+                        "ownerId": rocket["ownerId"],
+                        "point": point,
+                    })
+                elif self._stun_player(impact, now, RACE_CONFIG["knockdown_time"]):
+                    events.append({
+                        "type": "rocketHit",
+                        "rocketId": rocket_id,
+                        "targetId": impact.id,
+                        "ownerId": rocket["ownerId"],
+                        "point": point,
+                    })
+                else:
+                    events.append({
+                        "type": "rocketBlocked",
+                        "rocketId": rocket_id,
+                        "targetId": impact.id,
+                        "ownerId": rocket["ownerId"],
+                        "point": point,
+                        "reason": "immunity",
+                    })
+                self.rockets.pop(rocket_id, None)
+                continue
+            if (
+                rocket["distance"] >= self.race_distance
+                or rocket["age"] >= RACE_CONFIG["rocket_lifetime"]
+                or (
+                    rocket["targetId"] is None
+                    and rocket["noTargetAge"] >= RACE_CONFIG["rocket_no_target_lifetime"]
+                )
+            ):
+                self.rockets.pop(rocket_id, None)
+        return events
+
     def use_item(self, player_id: str) -> dict[str, Any]:
         player = self.players.get(player_id)
         if player is None:
@@ -617,45 +895,110 @@ class GameRoom:
 
         now = time.monotonic()
         item = player.item
-        if item not in {"BOOST", "SHIELD", "ROCKET"}:
+        if item not in {
+            "TURBO", "SHIELD", "ROCKET", "SLOW_TRAP", "COOL_DOWN", "MAGNET", "LIGHTNING",
+        }:
             raise ValueError("That item is not available.")
-        ahead = []
-        if item == "ROCKET":
-            ahead = [
-                runner for runner in self.players.values()
-                if runner.id != player.id
-                and runner.id not in self.finish_order
-                and runner.distance > player.distance
-            ]
-            if not ahead:
-                raise ValueError("There is no runner ahead to target.")
-
         targets: list[str] = []
+        blocked: list[str] = []
         player.item = None
         player.items_used += 1
-        if item == "BOOST":
-            player.active_effects["BOOST"] = (
-                now + RACE_CONFIG["boost_seconds"],
-                RACE_CONFIG["boost_multiplier"],
+        rocket_id: str | None = None
+        if item == "TURBO":
+            player.active_effects["TURBO"] = (
+                now + RACE_CONFIG["turbo_seconds"],
+                RACE_CONFIG["turbo_multiplier"],
             )
         elif item == "SHIELD":
             player.active_effects["SHIELD"] = (now + RACE_CONFIG["shield_seconds"], 1.0)
         elif item == "ROCKET":
-            target = min(ahead, key=lambda runner: runner.distance - player.distance)
-            if self._apply_negative_effect(
-                target,
-                "ROCKET",
-                RACE_CONFIG["rocket_multiplier"],
-                RACE_CONFIG["rocket_seconds"],
-                now,
-            ):
+            ahead = [
+                runner for runner in self.players.values()
+                if runner.id != player.id
+                and runner.id not in self.finish_order
+                and 0 < runner.distance - player.distance <= RACE_CONFIG["max_rocket_range"]
+            ]
+            target = min(ahead, key=lambda runner: runner.distance - player.distance) if ahead else None
+            rocket_id = secrets.token_hex(6)
+            rocket = {
+                "id": rocket_id,
+                "ownerId": player.id,
+                "lane": float(player.lane),
+                "distance": min(self.race_distance, player.distance + 1.5),
+                "speed": max(
+                    RACE_CONFIG["rocket_min_speed"],
+                    player.speed * RACE_CONFIG["rocket_speed_multiplier"],
+                ),
+                "targetId": target.id if target else None,
+                "age": 0.0,
+                "noTargetAge": 0.0,
+            }
+            self.rockets[rocket_id] = rocket
+            if target:
                 targets.append(target.id)
+        else:
+            ahead = sorted(
+                (
+                    runner for runner in self.players.values()
+                    if runner.id != player.id
+                    and runner.id not in self.finish_order
+                    and runner.distance > player.distance
+                ),
+                key=lambda runner: runner.distance - player.distance,
+            )
+            if item == "COOL_DOWN":
+                player.heat = 40.0
+                player.heat_locked_until = now + RACE_CONFIG["cool_down_seconds"]
+                player.overheated_until = 0.0
+                player.active_effects["COOL_DOWN"] = (
+                    now + RACE_CONFIG["cool_down_seconds"],
+                    1.0,
+                )
+            elif item == "MAGNET":
+                player.magnet_charges += RACE_CONFIG["magnet_pad_charges"]
+            elif item == "SLOW_TRAP" and ahead:
+                target = ahead[0]
+                if self._apply_negative_effect(
+                    target,
+                    "SLOW_TRAP",
+                    RACE_CONFIG["slow_trap_multiplier"],
+                    RACE_CONFIG["slow_trap_seconds"],
+                    now,
+                ):
+                    targets.append(target.id)
+                else:
+                    blocked.append(target.id)
+            elif item == "LIGHTNING":
+                for target in ahead:
+                    if self._apply_negative_effect(
+                        target,
+                        "LIGHTNING",
+                        RACE_CONFIG["lightning_multiplier"],
+                        RACE_CONFIG["lightning_seconds"],
+                        now,
+                    ):
+                        self._stun_player(target, now, RACE_CONFIG["lightning_stun_seconds"])
+                        targets.append(target.id)
+                    else:
+                        blocked.append(target.id)
+        rocket = self.rockets.get(rocket_id) if rocket_id else None
         return {
             "type": "itemUsed",
             "id": player.id,
             "sourceName": player.name,
             "item": item,
             "targetIds": targets,
+            "blockedIds": blocked,
+            "rocketId": rocket_id,
+            "incoming": (
+                {
+                    "type": "incoming",
+                    "targetId": targets[0],
+                    "eta": round(max(0.0, rocket["distance"] - player.distance) / rocket["speed"], 2),
+                }
+                if rocket and targets
+                else None
+            ),
         }
 
     async def leave_player(self, player_id: str) -> bool:
@@ -717,6 +1060,8 @@ class GameRoom:
         self.results_sent = False
         self.result_saved = False
         self.item_boxes.clear()
+        self.boost_pads.clear()
+        self.rockets.clear()
         for player in self.players.values():
             player.distance = 0.0
             player.speed = 0.0
@@ -734,4 +1079,11 @@ class GameRoom:
             player.active_effects.clear()
             player.heat_locked_until = 0.0
             player.items_used = 0
+            player.used_pad_indices.clear()
+            player.stunned_until = 0.0
+            player.getup_until = 0.0
+            player.stun_immunity_until = 0.0
+            player.magnet_charges = 0
+            player.perfect_pads = 0
+            player.pads_hit = 0
         await self.send_to_all(self.lobby_payload())

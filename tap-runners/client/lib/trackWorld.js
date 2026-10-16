@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { getTheme } from "./themes";
 import { TRACK_LENGTH, LANE_COUNT, LANE_WIDTH, TRACK_WIDTH } from "./themes/constants";
 import { addLaneMarkings, clearThemeMaterialCache, material, makeSignTexture } from "./themes/shared";
@@ -204,9 +205,18 @@ function addCourseSurface(root, theme, trackLength) {
 function addItemBoxes(root, theme, boxes) {
   if (!boxes.length) return null;
   const texture = makeSignTexture("?", "#f0b53f", "#fffdf5", 128, 128);
+  const geometry = new RoundedBoxGeometry(0.85, 0.85, 0.85, 2, 0.12);
+  const boxMaterial = getSceneQuality().id === "HIGH"
+    ? new THREE.MeshStandardMaterial({
+      map: texture,
+      color: "#fffdf5",
+      roughness: 0.28,
+      metalness: 0.08,
+    })
+    : new THREE.MeshLambertMaterial({ map: texture, color: "#fffdf5" });
   const mesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.85, 0.85, 0.85),
-    new THREE.MeshToonMaterial({ map: texture, color: "#fffdf5" }),
+    geometry,
+    boxMaterial,
     boxes.length,
   );
   mesh.name = "race-item-boxes";
@@ -223,10 +233,72 @@ function addItemBoxes(root, theme, boxes) {
   });
   mesh.instanceMatrix.needsUpdate = true;
   root.add(mesh);
-  return { mesh, boxes, transform, fadedAt: new Float64Array(boxes.length), texture };
+  const halo = new THREE.InstancedMesh(
+    new THREE.TorusGeometry(0.62, 0.035, 5, 16),
+    new THREE.MeshBasicMaterial({ color: theme.trackAccent, transparent: true, opacity: 0.85 }),
+    boxes.length,
+  );
+  halo.name = "race-item-box-rings";
+  halo.userData.distanceCull = false;
+  boxes.forEach((box, instanceIndex) => {
+    transform.position.set(
+      (box.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
+      0.035,
+      -box.distance,
+    );
+    transform.rotation.set(Math.PI / 2, 0, 0);
+    transform.updateMatrix();
+    halo.setMatrixAt(instanceIndex, transform.matrix);
+  });
+  halo.instanceMatrix.needsUpdate = true;
+  root.add(halo);
+  mesh.castShadow = true;
+  return {
+    mesh,
+    halo,
+    boxes,
+    transform,
+    fadedAt: new Float64Array(boxes.length),
+    texture,
+  };
 }
 
-export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = []) {
+function addBoostPads(root, theme, pads) {
+  if (!pads.length) return null;
+  const shape = new THREE.Shape();
+  shape.moveTo(-0.34, -0.42);
+  shape.lineTo(0.34, -0.42);
+  shape.lineTo(0.34, 0.04);
+  shape.lineTo(0.52, 0.04);
+  shape.lineTo(0, 0.48);
+  shape.lineTo(-0.52, 0.04);
+  shape.lineTo(-0.34, 0.04);
+  shape.closePath();
+  const geometry = new THREE.ShapeGeometry(shape);
+  const mesh = new THREE.InstancedMesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ color: theme.trackAccent, side: THREE.DoubleSide }),
+    pads.length,
+  );
+  mesh.name = "race-boost-pads";
+  mesh.userData.distanceCull = false;
+  const transform = new THREE.Object3D();
+  pads.forEach((pad, index) => {
+    transform.position.set(
+      (pad.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
+      0.018,
+      -pad.distance,
+    );
+    transform.rotation.set(-Math.PI / 2, 0, 0);
+    transform.updateMatrix();
+    mesh.setMatrixAt(index, transform.matrix);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  root.add(mesh);
+  return { mesh, pads, transform, fadedAt: new Float64Array(pads.length) };
+}
+
+export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [], boostPads = []) {
   const theme = getTheme(themeId);
   const root = new THREE.Group();
   root.name = `race-world-${theme.environment}`;
@@ -236,6 +308,7 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [])
   const environment = builder(root, theme, initialDistance, initialDistance);
   mergeStaticMeshes(root);
   let itemBoxSystem = addItemBoxes(root, theme, itemBoxes);
+  let boostPadSystem = addBoostPads(root, theme, boostPads);
   root.traverse((object) => {
     if (
       (object.isMesh || object.isInstancedMesh || object.isPoints)
@@ -259,17 +332,35 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [])
     setItemBoxes(boxes) {
       if (itemBoxSystem) {
         root.remove(itemBoxSystem.mesh);
+        root.remove(itemBoxSystem.halo);
         itemBoxSystem.mesh.geometry.dispose();
         itemBoxSystem.mesh.material.dispose();
+        itemBoxSystem.halo.geometry.dispose();
+        itemBoxSystem.halo.material.dispose();
         itemBoxSystem.texture?.dispose();
       }
       itemBoxSystem = addItemBoxes(root, theme, boxes);
+    },
+    setBoostPads(pads) {
+      if (boostPadSystem) {
+        root.remove(boostPadSystem.mesh);
+        boostPadSystem.mesh.geometry.dispose();
+        boostPadSystem.mesh.material.dispose();
+      }
+      boostPadSystem = addBoostPads(root, theme, pads);
     },
     hitItemBox(boxIndex, time) {
       if (!itemBoxSystem) return;
       const instanceIndex = itemBoxSystem.boxes.findIndex((box) => box.index === boxIndex);
       if (instanceIndex >= 0 && !itemBoxSystem.fadedAt[instanceIndex]) {
         itemBoxSystem.fadedAt[instanceIndex] = time || 0.000001;
+      }
+    },
+    hitBoostPad(padIndex, time) {
+      if (!boostPadSystem) return;
+      const instanceIndex = boostPadSystem.pads.findIndex((pad) => pad.index === padIndex);
+      if (instanceIndex >= 0 && !boostPadSystem.fadedAt[instanceIndex]) {
+        boostPadSystem.fadedAt[instanceIndex] = time || 0.000001;
       }
     },
     update({ time, countdown, raceDistance, progress = 0, raceTime = 0 }) {
@@ -281,7 +372,7 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [])
           const box = itemBoxSystem.boxes[index];
           itemBoxSystem.transform.position.set(
             (box.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
-            0.8,
+            0.8 + Math.sin(time * 2.5 + index) * 0.12,
             -box.distance,
           );
           itemBoxSystem.transform.rotation.set(0, time * 0.45, 0);
@@ -289,8 +380,32 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [])
           itemBoxSystem.transform.scale.setScalar(pulse * fade);
           itemBoxSystem.transform.updateMatrix();
           itemBoxSystem.mesh.setMatrixAt(index, itemBoxSystem.transform.matrix);
+          itemBoxSystem.transform.position.y = 0.035;
+          itemBoxSystem.transform.rotation.set(Math.PI / 2, 0, 0);
+          itemBoxSystem.transform.scale.setScalar(fade * (1 + Math.sin(time * 3 + index) * 0.07));
+          itemBoxSystem.transform.updateMatrix();
+          itemBoxSystem.halo.setMatrixAt(index, itemBoxSystem.transform.matrix);
         }
         itemBoxSystem.mesh.instanceMatrix.needsUpdate = true;
+        itemBoxSystem.halo.instanceMatrix.needsUpdate = true;
+      }
+      if (boostPadSystem) {
+        for (let index = 0; index < boostPadSystem.pads.length; index += 1) {
+          const fadedAt = boostPadSystem.fadedAt[index];
+          const fade = fadedAt ? Math.max(0, 1 - (time - fadedAt) / 0.35) : 1;
+          const pad = boostPadSystem.pads[index];
+          boostPadSystem.transform.position.set(
+            (pad.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH,
+            0.018,
+            -pad.distance,
+          );
+          boostPadSystem.transform.rotation.set(-Math.PI / 2, 0, 0);
+          const pulse = 1 + Math.sin(time * 4 + index) * 0.06;
+          boostPadSystem.transform.scale.set(pulse * fade, pulse * fade, 1);
+          boostPadSystem.transform.updateMatrix();
+          boostPadSystem.mesh.setMatrixAt(index, boostPadSystem.transform.matrix);
+        }
+        boostPadSystem.mesh.instanceMatrix.needsUpdate = true;
       }
       updateFrame += 1;
       if (quality.crowdAnimationInterval === 0) return;

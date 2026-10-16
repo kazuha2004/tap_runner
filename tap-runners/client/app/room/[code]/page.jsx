@@ -9,7 +9,7 @@ import ExitDialog from "../../../components/ExitDialog";
 import ResultsPanel from "../../../components/ResultsPanel";
 import { GameSocket, getServerHttpUrl } from "../../../lib/socket";
 import { DEFAULT_THEME } from "../../../lib/themes";
-import { playToneSequence } from "../../../lib/audio";
+import { playTone, playToneSequence } from "../../../lib/audio";
 
 const formatItemName = (item) => item.replaceAll("_", " ");
 
@@ -27,6 +27,7 @@ export default function RoomPage() {
   const [selectedTheme, setSelectedTheme] = useState(DEFAULT_THEME);
   const [raceDistance, setRaceDistance] = useState(200);
   const [itemBoxes, setItemBoxes] = useState([]);
+  const [boostPads, setBoostPads] = useState([]);
   const [itemEvents, setItemEvents] = useState([]);
   const [debugConfig, setDebugConfig] = useState(null);
   const [debugConfigError, setDebugConfigError] = useState("");
@@ -41,6 +42,8 @@ export default function RoomPage() {
   const [exitOpen, setExitOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [slowMotion, setSlowMotion] = useState(false);
+  const [lightningFlash, setLightningFlash] = useState(false);
+  const [incomingWarning, setIncomingWarning] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [hudUnmounted, setHudUnmounted] = useState(false);
   const socketRef = useRef(null);
@@ -52,6 +55,10 @@ export default function RoomPage() {
   const recordedResultRef = useRef(null);
   const toastTimersRef = useRef(new Set());
   const hudUnmountTimerRef = useRef(null);
+  const lightningFlashTimerRef = useRef(null);
+  const incomingWarningTimerRef = useRef(null);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
   joinedIdRef.current = joined?.id || null;
 
   const showToast = useCallback((message) => {
@@ -60,7 +67,7 @@ export default function RoomPage() {
     const timer = setTimeout(() => {
       setToasts((current) => current.filter((toast) => toast.id !== id));
       toastTimersRef.current.delete(timer);
-    }, 2500);
+    }, 2000);
     toastTimersRef.current.add(timer);
   }, []);
 
@@ -71,7 +78,7 @@ export default function RoomPage() {
       setError("");
       return;
     }
-    if (message.type === "itemPickedUp") {
+    if (message.type === "boxPickup" || message.type === "itemPickedUp") {
       setItemEvents((current) => [...current.slice(-15), message]);
       if (message.id === joinedIdRef.current) {
         showToast(`You got ${formatItemName(message.item)}!`);
@@ -80,8 +87,47 @@ export default function RoomPage() {
     }
     if (message.type === "itemUsed") {
       setItemEvents((current) => [...current.slice(-15), message]);
+      if (
+        message.item === "LIGHTNING"
+        && message.targetIds?.includes(joinedIdRef.current)
+        && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        setLightningFlash(true);
+        clearTimeout(lightningFlashTimerRef.current);
+        lightningFlashTimerRef.current = setTimeout(() => setLightningFlash(false), 120);
+      }
       if (message.targetIds?.includes(joinedIdRef.current)) {
         showToast(`${message.sourceName} used ${formatItemName(message.item)} on you!`);
+      }
+      return;
+    }
+    if (["padHit", "rocketHit", "rocketBlocked", "shieldPopped"].includes(message.type)) {
+      setItemEvents((current) => [...current.slice(-15), message]);
+      if (message.type === "padHit" && message.id === joinedIdRef.current) {
+        showToast(message.quality === "perfect" ? "PERFECT PAD!" : "BOOST PAD!");
+      }
+      if (message.type === "rocketHit" && message.targetId === joinedIdRef.current) {
+        showToast("Knocked down! Get back in the race!");
+      }
+      if (message.type === "rocketBlocked" && message.targetId === joinedIdRef.current) {
+        showToast(message.reason === "immunity" ? "You resisted the hit!" : "Your shield blocked the rocket!");
+      }
+      if (
+        message.type === "shieldPopped"
+        && message.id === joinedIdRef.current
+      ) showToast("Shield blocked the hit!");
+      return;
+    }
+    if (message.type === "incoming") {
+      setItemEvents((current) => [...current.slice(-15), message]);
+      if (message.targetId === joinedIdRef.current) {
+        showToast("INCOMING! Brace for impact!");
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          setIncomingWarning(true);
+          clearTimeout(incomingWarningTimerRef.current);
+          incomingWarningTimerRef.current = setTimeout(() => setIncomingWarning(false), 1000);
+        }
+        if (!mutedRef.current) playTone(920, 0.12, "square");
       }
       return;
     }
@@ -92,6 +138,7 @@ export default function RoomPage() {
       setRaceDistance(message.raceDistance || 200);
       if (message.phase === "lobby") {
         setItemBoxes([]);
+        setBoostPads([]);
         setItemEvents([]);
         latestGameStateRef.current = null;
         celebratedFinishRef.current = null;
@@ -107,6 +154,7 @@ export default function RoomPage() {
     }
     if (message.type === "raceStart") {
       setItemBoxes(message.itemBoxes || []);
+      setBoostPads(message.boostPads || []);
       setItemEvents([]);
       return;
     }
@@ -189,6 +237,8 @@ export default function RoomPage() {
       socketRef.current = null;
       toastTimersRef.current.forEach(clearTimeout);
       toastTimersRef.current.clear();
+      clearTimeout(lightningFlashTimerRef.current);
+      clearTimeout(incomingWarningTimerRef.current);
       clearTimeout(navigationTimerRef.current);
     };
   }, [connect, initialNameFromUrl]);
@@ -409,6 +459,7 @@ export default function RoomPage() {
             resultsOpen={Boolean(results)}
             stateSnapshotRef={latestGameStateRef}
             itemBoxes={itemBoxes}
+            boostPads={boostPads}
             itemEvents={itemEvents}
           />
           {!hudUnmounted && (
@@ -425,6 +476,7 @@ export default function RoomPage() {
                 onUseItem={() => send("useItem")}
                 debugEnabled={debugEnabled}
                 itemBoxes={itemBoxes}
+                boostPads={boostPads}
                 debugConfig={debugConfig}
                 debugConfigError={debugConfigError}
               />
@@ -456,6 +508,8 @@ export default function RoomPage() {
       )}
 
       {toasts.length > 0 && <div className="toast-stack" aria-live="polite">{toasts.map((toast) => <div className="room-toast" key={toast.id}>{toast.message}</div>)}</div>}
+      <div className={`lightning-flash ${lightningFlash ? "active" : ""}`} aria-hidden="true" />
+      <div className={`incoming-tint ${incomingWarning ? "active" : ""}`} aria-hidden="true" />
       <ExitDialog open={exitOpen} title={exitTitle} message={exitMessage} onClose={closeExit} onConfirm={confirmExit} />
     </main>
   );

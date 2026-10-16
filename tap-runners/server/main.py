@@ -159,7 +159,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 elif action == "start":
                     await room.start(player_id)
                 elif action == "useItem":
-                    await room.send_to_all(room.use_item(player_id))
+                    used = room.use_item(player_id)
+                    incoming = used.pop("incoming", None)
+                    blocked_ids = used.get("blockedIds", [])
+                    await room.send_to_all(used)
+                    for blocked_id in blocked_ids:
+                        await room.send_to_all({
+                            "type": "shieldPopped",
+                            "id": blocked_id,
+                            "reason": "item",
+                        })
+                    if incoming:
+                        await room.send_to_all(incoming)
                 elif action == "setDistance":
                     room.set_race_distance(player_id, message.get("meters"))
                     await broadcast_lobby(room)

@@ -129,6 +129,8 @@ def _race_document(room: GameRoom) -> dict[str, Any]:
                 "taps": player.tap_count,
                 "times_overheated": player.times_overheated,
                 "items_used": player.items_used,
+                "pads_hit": player.pads_hit,
+                "perfect_pads": player.perfect_pads,
                 "dnf": player.finish_place is None,
             }
             for position, player in enumerate(ordered_players, start=1)

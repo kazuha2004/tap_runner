@@ -57,7 +57,7 @@ export default function ResultsPanel({
                       {(player.avgSpeed * 3.6).toFixed(1)} avg - {(player.topSpeed * 3.6).toFixed(1)} top - {player.taps} taps
                     </small>
                     <small className="result-power-stats">
-                      {player.timesOverheated || 0} overheats · {player.itemsUsed || 0} items used
+                      {player.timesOverheated || 0} overheats · {player.perfectPads || 0} perfect pads · {player.itemsUsed || 0} items
                     </small>
                   </td>
                   <td>{player.time === null ? "—" : `${player.time.toFixed(2)}s`}</td>

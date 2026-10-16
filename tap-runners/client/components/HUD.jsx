@@ -21,6 +21,7 @@ function HUD({
   onUseItem,
   debugEnabled = false,
   itemBoxes = [],
+  boostPads = [],
   debugConfig,
   debugConfigError,
 }) {
@@ -37,10 +38,15 @@ function HUD({
   const previousOverheatedRef = useRef(false);
   const previousTapCountRef = useRef(0);
   const tutorialTimerRef = useRef(null);
+  const packTimerRef = useRef(null);
+  const previousItemRef = useRef(null);
+  const itemRouletteUntilRef = useRef(0);
+  const packSummaryRef = useRef(null);
   const overheatedRef = useRef(false);
   const itemAvailableRef = useRef(false);
   const onUseItemRef = useRef(onUseItem);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showPack, setShowPack] = useState(false);
   const local = state?.players?.[me?.id];
   const ordered = state?.ranking?.map((id) => [id, state.players[id]]).filter(([, player]) => player) ||
     Object.entries(state?.players || {}).sort((a, b) => (b[1].distance || 0) - (a[1].distance || 0));
@@ -72,6 +78,7 @@ function HUD({
       const zone = localPlayer?.zone || "cold";
       const tapButton = hudRef.current?.querySelector("[data-tap-button]");
       const itemButton = hudRef.current?.querySelector("[data-item-button]");
+      const currentItem = localPlayer?.item || null;
       if (heatWidget) {
         heatWidget.dataset.zone = zone;
         heatWidget.dataset.overheated = String(overheated);
@@ -99,15 +106,28 @@ function HUD({
       itemAvailableRef.current = Boolean(localPlayer?.item) && !overheated;
       if (itemButton) {
         itemButton.disabled = tapDisabledRef.current || !itemAvailableRef.current;
-        itemButton.dataset.item = localPlayer?.item || "";
+        const changedItem = currentItem !== previousItemRef.current;
+        itemButton.dataset.item = currentItem || "";
+        if (changedItem && currentItem) {
+          itemRouletteUntilRef.current = performance.now() + 800;
+          itemButton.dataset.roulette = "true";
+        }
         const itemName = itemButton.querySelector("[data-item-name]");
-        if (itemName) itemName.textContent = localPlayer?.item
-          ? localPlayer.item.replaceAll("_", " ")
-          : "EMPTY";
+        if (itemName) {
+          const remaining = itemRouletteUntilRef.current - performance.now();
+          if (remaining > 0) {
+            const roulette = ["TURBO", "SHIELD", "ROCKET", "MAGNET", "LIGHTNING", "COOL DOWN"];
+            itemName.textContent = roulette[Math.floor(performance.now() / 85) % roulette.length];
+          } else {
+            itemButton.dataset.roulette = "false";
+            itemName.textContent = currentItem ? currentItem.replaceAll("_", " ") : "EMPTY";
+          }
+        }
         itemButton.setAttribute("aria-label", localPlayer?.item
           ? `Use ${localPlayer.item.replaceAll("_", " ")}`
           : "No item held");
       }
+      previousItemRef.current = currentItem;
       if (previousZoneRef.current !== zone && zone === "sweet" && !muted) {
         playTone(880, 0.12, "sine");
       }
@@ -126,7 +146,7 @@ function HUD({
         if (!window.localStorage.getItem("tap-runners-heat-tutorial-seen")) {
           window.localStorage.setItem("tap-runners-heat-tutorial-seen", "1");
           setShowTutorial(true);
-          tutorialTimerRef.current = window.setTimeout(() => setShowTutorial(false), 6000);
+          tutorialTimerRef.current =           window.setTimeout(() => setShowTutorial(false), 5000);
         }
       }
       if (distanceNode) {
@@ -134,6 +154,17 @@ function HUD({
       }
       if (positionNode) {
         positionNode.textContent = ordinal(Math.max(1, ranking.findIndex(([id]) => id === me?.id) + 1));
+      }
+      const localIndex = ranking.findIndex(([id]) => id === me?.id);
+      const other = ranking[localIndex === 0 ? 1 : localIndex - 1]?.[1];
+      const gap = other
+        ? Math.abs((localPlayer?.distance || 0) - (other.distance || 0))
+        : 0;
+      if (packSummaryRef.current) {
+        const currentRank = Math.max(1, localIndex + 1);
+        packSummaryRef.current.textContent = currentRank === 1
+          ? `${ordinal(currentRank)} · +${gap.toFixed(1)}m ahead`
+          : `${ordinal(currentRank)} · ${gap.toFixed(1)}m back`;
       }
       if (countNode) countNode.textContent = `OF ${String(Math.max(players.length, ranking.length)).padStart(2, "0")}`;
       if (paceNode) paceNode.textContent = `${Math.round((localPlayer?.speed || 0) * 100)} SPD`;
@@ -192,6 +223,8 @@ function HUD({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => () => clearTimeout(packTimerRef.current), []);
+
   useEffect(() => {
     if (countdown !== null && countdown !== lastCountdown.current && !muted) {
       playTone(countdown === "GO" ? 880 : 440 + Number(countdown) * 80, countdown === "GO" ? 0.3 : 0.12, "triangle");
@@ -231,12 +264,19 @@ function HUD({
     if (navigator.vibrate) navigator.vibrate(12);
   }
 
+  function togglePack() {
+    const next = !showPack;
+    setShowPack(next);
+    clearTimeout(packTimerRef.current);
+    if (next) packTimerRef.current = window.setTimeout(() => setShowPack(false), 4000);
+  }
+
   return (
-    <div className="game-hud" ref={hudRef}>
+    <div className="game-hud" ref={hudRef} data-pack-open={String(showPack)}>
       <div className="race-stats">
+        <div className="stat-panel position-panel"><span>PLACE</span><strong data-hud-position>{ordinal(position)}</strong><small data-hud-count>OF {String(Math.max(players.length, ordered.length)).padStart(2, "0")}</small></div>
         <div className="stat-panel distance-panel"><span>DISTANCE LEFT</span><strong><span data-hud-distance>{Math.ceil(distanceLeft)}</span><i> m</i></strong></div>
-        <div className="stat-panel position-panel"><span>POSITION</span><strong data-hud-position>{ordinal(position)}</strong><small data-hud-count>OF {String(Math.max(players.length, ordered.length)).padStart(2, "0")}</small></div>
-        <div className="stat-panel speed-panel"><span>PACE</span><strong><span data-hud-pace>{Math.round(speed * 100)} SPD</span></strong><div className="speed-track"><b data-hud-speed-bar style={{ width: `${Math.min(100, speed / 1.4 * 100)}%` }} /></div></div>
+        <div className="stat-panel speed-panel"><span>SPEED</span><strong><span data-hud-pace>{Math.round(speed * 100)}</span></strong><div className="speed-track"><b data-hud-speed-bar style={{ width: `${Math.min(100, speed / 1.4 * 100)}%` }} /></div></div>
       </div>
       <div className="race-map" aria-label="Race progress" ref={mapRef}>
         <div className="race-map-track" />
@@ -253,21 +293,27 @@ function HUD({
           />
         ))}
       </div>
+      <button className="pack-pill" type="button" onClick={togglePack}>
+        <span>THE PACK</span><b data-pack-summary ref={packSummaryRef}>{ordinal(position)} · +0.0m ahead</b>
+      </button>
       <div className="leaderboard" ref={leaderboardRef}>
         <div className="leaderboard-title"><span>THE PACK</span><i>LIVE</i></div>
         {(ordered.length ? ordered : players.map((player) => [player.id, player])).slice(0, 5).map(([id, player], index) => <div className={`leader-row ${id === me?.id ? "is-you" : ""}`} key={id} data-runner-id={id}><b data-rank>{String(index + 1).padStart(2, "0")}</b><i style={{ background: player.color }} /><span>{player.name}</span><small data-runner-speed>{id === me?.id ? "YOU" : `${Math.round((player.speed || 0) * 100)} SPD`}</small></div>)}
       </div>
-      <div className="heat-widget" data-heat-widget data-zone={local?.zone || "cold"} data-overheated="false" aria-label="Runner heat">
-        <div className="heat-heading"><b data-heat-label>HEAT</b><span data-heat-value>{Math.round(local?.heat || 0)}%</span><span className="heat-warning">▲</span></div>
-        <div className="heat-track"><i className="heat-zone-cold" /><i className="heat-zone-sweet" /><i className="heat-zone-hot" /><b className="heat-marker" /></div>
-        <strong className="zone-badge" data-zone-badge hidden>IN THE ZONE!</strong>
-        <strong className="heat-message" data-cooling-countdown />
-      </div>
-      {debugEnabled && <aside className="race-debug-panel"><b>DEBUG</b><span data-debug-state>Heat waiting for race state</span><small>Boxes: {itemBoxes.map((box) => `${box.lane + 1}:${box.distance}m`).join(", ") || "not generated"}</small><small>Odds: {JSON.stringify(debugConfig?.item_weights_last || "unavailable")}</small>{debugConfigError && <small>{debugConfigError}</small>}</aside>}
-      {showTutorial && <div className="heat-tutorial" role="status">Tap in a steady rhythm. Don't mash!<span aria-hidden="true">↘</span></div>}
+      {debugEnabled && <aside className="race-debug-panel"><b>DEBUG</b><span data-debug-state>Heat waiting for race state</span><small>Boxes: {itemBoxes.map((box) => `${box.lane + 1}:${box.distance}m`).join(", ") || "not generated"}</small><small>Pads: {boostPads.map((pad) => `${pad.lane + 1}:${pad.distance}m`).join(", ") || "not generated"}</small><small>Odds: {JSON.stringify(debugConfig?.item_weights_last || "unavailable")}</small>{debugConfigError && <small>{debugConfigError}</small>}</aside>}
       {countdown !== null && <div className={`countdown-overlay ${countdown === "GO" ? "go" : ""}`}><div>{countdown}</div><span>{countdown === "GO" ? "MAKE YOUR MOVE" : "GET READY"}</span></div>}
-      <button className="tap-button" data-tap-button onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="overheat-label" aria-hidden="true">COOLING DOWN...</span><span className="tap-caption">TAP TO</span><strong>TAP</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
-      <button className="item-button" data-item-button data-item="" onPointerDown={(event) => { event.preventDefault(); if (itemAvailableRef.current && !tapDisabledRef.current && !overheatedRef.current) onUseItemRef.current?.(); }} disabled aria-label="No item held"><svg viewBox="0 0 32 32" aria-hidden="true"><path className="item-icon-boost" d="M18 2 7 18h7l-1 12 12-17h-8z" /><path className="item-icon-shield" d="M16 3 5 7v8c0 7 5 11 11 14 6-3 11-7 11-14V7z" /><path className="item-icon-rocket" d="M27 4c-7 0-13 3-17 9l-4 6 7 7 6-4c6-4 9-10 8-18zM10 22l-4 6 7-2m1-9h.01" /><path className="item-icon-empty" d="M7 7h18v18H7zM11 11h10v10H11z" /></svg><span className="item-button-title">ITEM</span><strong data-item-name>EMPTY</strong><small>PRESS E</small></button>
+      <div className="race-control-dock">
+        <button className="item-button" data-item-button data-item="" onPointerDown={(event) => { event.preventDefault(); if (itemAvailableRef.current && !tapDisabledRef.current && !overheatedRef.current) onUseItemRef.current?.(); }} disabled aria-label="No item held"><svg viewBox="0 0 32 32" aria-hidden="true"><path className="item-icon-turbo" d="M18 2 7 18h7l-1 12 12-17h-8z" /><path className="item-icon-shield" d="M16 3 5 7v8c0 7 5 11 11 14 6-3 11-7 11-14V7z" /><path className="item-icon-rocket" d="M27 4c-7 0-13 3-17 9l-4 6 7 7 6-4c6-4 9-10 8-18zM10 22l-4 6 7-2m1-9h.01" /><path className="item-icon-trap" d="M5 20h22l-4 7H9zM8 16l4-5m4 5 4-5m1-4 3-3" /><path className="item-icon-cool" d="M16 3v26m-11-20 22 12m0-12L5 21m7-16 4 4 4-4m-8 20 4-4 4 4" /><path className="item-icon-magnet" d="M7 5v11a9 9 0 0 0 18 0V5h-6v11a3 3 0 0 1-6 0V5z" /><path className="item-icon-lightning" d="m18 2-12 17h8l-1 11 13-18h-8z" /><path className="item-icon-empty" d="M7 7h18v18H7zM11 11h10v10H11z" /></svg><span className="item-button-title">ITEM</span><strong data-item-name>EMPTY</strong><small>PRESS E</small></button>
+        <div className="heat-widget" data-heat-widget data-zone={local?.zone || "cold"} data-overheated="false" aria-label="Runner heat">
+          <div className="heat-heading"><b data-heat-label>HEAT</b><span data-heat-value>{Math.round(local?.heat || 0)}%</span><span className="heat-warning">▲</span></div>
+          <div className="heat-track"><i className="heat-zone-cold" /><i className="heat-zone-sweet" /><i className="heat-zone-hot" /><b className="heat-marker" /></div>
+          <strong className="zone-badge" data-zone-badge hidden>IN THE ZONE!</strong>
+          <strong className="heat-message" data-cooling-countdown />
+        </div>
+        <button className="tap-button" data-tap-button onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="overheat-label" aria-hidden="true">COOLING...</span><strong>TAP!</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
+      </div>
+      {showPack && <div className="pack-sheet" aria-label="Race standings">{ordered.map(([id, player], index) => <div className={id === me?.id ? "is-you" : ""} key={id}><b>{index + 1}</b><span style={{ color: player.color }}>{player.name}</span><small>{Math.round(player.speed || 0)} SPD</small></div>)}</div>}
+      {showTutorial && <div className="heat-tutorial" role="status">Tap in a steady rhythm. Don’t mash!<span aria-hidden="true">↓</span></div>}
       <div className="game-bottom-hint"><span>✳</span> KEEP YOUR RHYTHM TO BUILD A BONUS <span className="desktop-hint">· SPACE TO TAP</span></div>
     </div>
   );
