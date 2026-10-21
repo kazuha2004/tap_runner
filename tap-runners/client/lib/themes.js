@@ -1,3 +1,5 @@
+import { THEME_TOKENS } from "./themes/tokens";
+
 export const THEMES = {
   "sunny-stadium": {
     id: "sunny-stadium",
@@ -145,5 +147,26 @@ export const THEME_LIST = Object.values(THEMES);
 export const DEFAULT_THEME = "sunny-stadium";
 
 export function getTheme(themeId) {
-  return THEMES[themeId] || THEMES[DEFAULT_THEME];
+  const selectedId = THEMES[themeId] ? themeId : DEFAULT_THEME;
+  const metadata = THEMES[selectedId];
+  const tokens = THEME_TOKENS[selectedId];
+  return {
+    ...metadata,
+    ...tokens,
+    skyTop: tokens.skyGradient[0],
+    skyBottom: tokens.skyGradient[1],
+    fog: tokens.fogColor,
+    ground: tokens.groundColor,
+    track: tokens.trackColor,
+    trackAccent: tokens.accentColor,
+    sun: tokens.light.sun,
+    keyLight: tokens.light.key,
+    hemiSky: tokens.light.hemiSky,
+    hemiGround: tokens.light.hemiGround,
+    sunDirection: tokens.light.direction,
+    sunPosition: tokens.light.position,
+    sunIntensity: tokens.light.intensity,
+    fillIntensity: tokens.light.fillIntensity,
+    exposure: tokens.light.exposure,
+  };
 }

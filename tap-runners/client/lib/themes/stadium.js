@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { TRACK_WIDTH } from "./constants";
+import { SCENE_SCALE } from "../sceneScale";
 import {
   addDistanceSigns,
   addInstances,
@@ -24,7 +25,7 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
         new THREE.BoxGeometry(width, 0.55, trackLength + 5),
         tier % 2 ? seatMaterial : tierMaterial,
       );
-      tierBox.position.set(side * (TRACK_WIDTH / 2 + 3.1 + tier * 0.68), 1.2 + tier * 0.72, -trackLength / 2);
+      tierBox.position.set(side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + 1.5 + tier * 0.68), 1.2 + tier * 0.72, -trackLength / 2);
       tierBox.castShadow = true;
       tierBox.receiveShadow = true;
       stands.add(tierBox);
@@ -47,11 +48,11 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
         new THREE.BoxGeometry(0.12, 0.12, trackLength + 10),
         material("#efad43"),
       );
-      rail.position.set(side * (TRACK_WIDTH / 2 + 2.25), railY, -trackLength / 2);
+      rail.position.set(side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + 1.5), railY, -trackLength / 2);
       stands.add(rail);
     }
   }
-  for (const endZ of [8, -raceDistance - 8]) {
+  for (const endZ of [-raceDistance - 8]) {
     if (endZ < 0) {
       const rearStand = new THREE.Mesh(
         new THREE.BoxGeometry(TRACK_WIDTH + 20, 5.6, 3.2),
@@ -77,7 +78,7 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
     for (let tier = 0; tier < 6; tier += 1) {
       for (let index = 0; index < 44; index += 1) {
         spectators.push({
-          x: side * (TRACK_WIDTH / 2 + 2.65 + tier * 0.68),
+          x: side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + 1.5 + tier * 0.68),
           y: 1.62 + tier * 0.72,
           z: -6 - index * ((trackLength - 12) / 43),
           scale: 0.72 + Math.random() * 0.18,
@@ -156,7 +157,7 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
   callbacks.push((time) => animateFlags(time));
 
   const scoreboard = new THREE.Group();
-  scoreboard.position.set(0, 12, -trackLength * 0.16);
+  scoreboard.position.set(TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + 10, 12, -trackLength * 0.16);
   const board = addMesh(
     scoreboard,
     new THREE.BoxGeometry(10, 5, 0.65),
@@ -188,7 +189,7 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
     texture.needsUpdate = true;
   });
   root.add(scoreboard);
-  addMesh(root, new THREE.BoxGeometry(4, 2.2, 2), "#e96459", [0, 14.5, -trackLength * 0.46]);
+  addMesh(root, new THREE.BoxGeometry(4, 2.2, 2), "#e96459", [-(TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + 10), 14.5, -trackLength * 0.46]);
 
   const clouds = [];
   for (let index = 0; index < 7; index += 1) {
@@ -205,25 +206,12 @@ export function buildStadium(root, theme, trackLength, raceDistance) {
   callbacks.push((time) => clouds.forEach(({ object, baseX, phase }) => {
     object.position.x = baseX + Math.sin(time * 0.025 + phase) * 4;
   }));
-  addDistanceSigns(root, trackLength, { pole: "#d8d5c9", board: "#e85d63", ink: "#e85d63", text: "#fffdf5" });
-  const startArch = addThemeArch(root, theme, "stadium", 0, "START");
+  addDistanceSigns(root, trackLength, { pole: "#d8d5c9", board: "#e85d63", ink: "#e85d63", text: "#fffdf5", clearance: SCENE_SCALE.propClearance });
   const finishArch = addThemeArch(root, theme, "stadium", -raceDistance, "FINISH");
   return {
     finishArch,
     update(time, progress, raceTime, countdown) {
       callbacks.forEach((callback) => callback(time, progress, raceTime, countdown));
-      updateLamps(startArch, countdown, time);
     },
   };
-}
-
-function updateLamps(arch, countdown, time) {
-  arch.userData.startLamps?.forEach(({ bulb, light, goLamp }, index) => {
-    const active = countdown === "GO"
-      ? goLamp
-      : typeof countdown === "number" && !goLamp && index < countdown;
-    const glow = active ? 1.5 + Math.sin(time * 10) * 0.15 : 0.08;
-    bulb.material.emissiveIntensity = glow;
-    if (light) light.intensity = active ? glow : 0.02;
-  });
 }

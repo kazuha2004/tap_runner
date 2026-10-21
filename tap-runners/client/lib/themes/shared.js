@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { LANE_COUNT, LANE_WIDTH, TRACK_WIDTH } from "./constants";
 import { getSceneQuality } from "../quality";
+import { SCENE_SCALE } from "../sceneScale";
 
 const materialCache = new Map();
 
@@ -91,7 +92,8 @@ export function makeSignTexture(label, fill, ink = "#fffdf5", width = 256, heigh
 export function addDistanceSigns(root, distance, style) {
   const entries = [];
   const spacing = style.spacing || (distance <= 100 ? 10 : distance <= 200 ? 25 : 50);
-  for (let meters = spacing; meters < distance; meters += spacing) {
+  const firstMarker = Math.ceil(15 / spacing) * spacing;
+  for (let meters = firstMarker; meters < distance; meters += spacing) {
     for (const side of [-1, 1]) {
       entries.push({ meters, side, z: -meters });
     }
@@ -104,31 +106,90 @@ export function addDistanceSigns(root, distance, style) {
       ? new THREE.OctahedronGeometry(0.78, 0)
       : new THREE.BoxGeometry(1.35, 0.82, 0.18);
   for (const { meters, side, z } of entries) {
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 1.65, 6), poleMaterial);
-    pole.position.set(side * (TRACK_WIDTH / 2 + 2.15), 0.82, z);
+    const clearance = Math.max(
+      style.clearance || SCENE_SCALE.propClearance,
+      SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2,
+    );
+    const boardHeight = SCENE_SCALE.distanceBoardHeight;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, boardHeight, 6), poleMaterial);
+    pole.position.set(side * (TRACK_WIDTH / 2 + clearance), boardHeight / 2, z);
     pole.castShadow = true;
     root.add(pole);
     const board = addMesh(
       root,
       signGeometry,
       style.board,
-      [side * (TRACK_WIDTH / 2 + 2.15), 1.78, z],
+      [side * (TRACK_WIDTH / 2 + clearance), boardHeight - 0.3, z],
     );
+    board.scale.set(0.7, 0.7, 0.7);
     if (style.shape === "round") board.rotation.x = Math.PI / 2;
     if (style.shape === "ice") board.rotation.z = Math.PI / 4;
     const texture = makeSignTexture(`${meters}m`, style.ink, style.text, 256, 112);
     if (texture) {
       const face = new THREE.Mesh(
-        new THREE.PlaneGeometry(1.1, 0.49),
+        new THREE.PlaneGeometry(0.78, 0.34),
         new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
       );
-      face.position.set(side * (TRACK_WIDTH / 2 + 2.15), 1.78, z + (side > 0 ? 0.11 : -0.11));
+      face.position.set(side * (TRACK_WIDTH / 2 + clearance), boardHeight - 0.3, z + (side > 0 ? 0.08 : -0.08));
       face.rotation.y = side > 0 ? 0 : Math.PI;
       root.add(face);
       updateables.push(texture);
     }
   }
   return updateables;
+}
+
+export function addStartGantry(root, theme) {
+  const gantry = new THREE.Group();
+  gantry.name = "shared-start-gantry";
+  gantry.position.z = -SCENE_SCALE.gantryDistance;
+  gantry.userData.fadeStartedAt = null;
+  gantry.userData.removed = false;
+  const frameMaterial = new THREE.MeshBasicMaterial({
+    color: theme.accentColor,
+    transparent: true,
+    opacity: 1,
+  });
+  const lampMaterials = [];
+  const postGeometry = new THREE.BoxGeometry(0.16, SCENE_SCALE.gantryHeight, 0.18);
+  const beamGeometry = new THREE.BoxGeometry(TRACK_WIDTH + 1.4, 0.18, 0.2);
+  const postX = TRACK_WIDTH / 2 + 0.65;
+  for (const side of [-1, 1]) {
+    const post = new THREE.Mesh(postGeometry, frameMaterial);
+    post.position.set(side * postX, SCENE_SCALE.gantryHeight / 2, 0);
+    gantry.add(post);
+  }
+  const beam = new THREE.Mesh(beamGeometry, frameMaterial);
+  beam.position.y = SCENE_SCALE.gantryHeight - 0.12;
+  gantry.add(beam);
+
+  const lampGeometry = new THREE.SphereGeometry(0.12, 8, 6);
+  for (let index = 0; index < 4; index += 1) {
+    const lampMaterial = new THREE.MeshBasicMaterial({
+      color: "#d94d48",
+      transparent: true,
+      opacity: 1,
+    });
+    lampMaterials.push(lampMaterial);
+    const lamp = new THREE.Mesh(lampGeometry, lampMaterial);
+    lamp.position.set((index - 1.5) * 0.55, SCENE_SCALE.gantryHeight - 0.42, 0.15);
+    lamp.visible = false;
+    gantry.add(lamp);
+  }
+  gantry.userData.lampMaterials = lampMaterials;
+  gantry.userData.frameMaterial = frameMaterial;
+  gantry.userData.dispose = () => {
+    if (gantry.userData.removed) return;
+    gantry.userData.removed = true;
+    root.remove(gantry);
+    postGeometry.dispose();
+    beamGeometry.dispose();
+    lampGeometry.dispose();
+    frameMaterial.dispose();
+    lampMaterials.forEach((lampMaterial) => lampMaterial.dispose());
+  };
+  root.add(gantry);
+  return gantry;
 }
 
 export function addThemeArch(root, theme, style, z, label) {
@@ -367,7 +428,7 @@ export function addWavingFlags(root, positions, colors) {
 }
 
 export function addLaneMarkings(root, length) {
-  const lineMaterial = material("#fffdf2");
+  const lineMaterial = material("#fffdf5");
   const lines = new THREE.InstancedMesh(
     new THREE.BoxGeometry(0.055, 0.025, length),
     lineMaterial,

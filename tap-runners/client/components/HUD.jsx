@@ -27,7 +27,7 @@ function HUD({
 }) {
   const hudRef = useRef(null);
   const mapRef = useRef(null);
-  const leaderboardRef = useRef(null);
+  const packSheetRef = useRef(null);
   const tapPopupsRef = useRef([]);
   const tapAnimationsRef = useRef([]);
   const nextTapPopupRef = useRef(0);
@@ -71,6 +71,7 @@ function HUD({
       const countNode = hudRef.current?.querySelector("[data-hud-count]");
       const paceNode = hudRef.current?.querySelector("[data-hud-pace]");
       const speedBar = hudRef.current?.querySelector("[data-hud-speed-bar]");
+      const progressBar = hudRef.current?.querySelector("[data-progress-fill]");
       const heatWidget = hudRef.current?.querySelector("[data-heat-widget]");
       const heatValue = Math.max(0, Math.min(100, localPlayer?.heat || 0));
       const overheated = Boolean(localPlayer?.overheated);
@@ -163,12 +164,15 @@ function HUD({
       if (packSummaryRef.current) {
         const currentRank = Math.max(1, localIndex + 1);
         packSummaryRef.current.textContent = currentRank === 1
-          ? `${ordinal(currentRank)} · +${gap.toFixed(1)}m ahead`
-          : `${ordinal(currentRank)} · ${gap.toFixed(1)}m back`;
+          ? `${ordinal(currentRank).toLowerCase()} - +${gap.toFixed(1)}m ahead`
+          : `${ordinal(currentRank).toLowerCase()} - ${gap.toFixed(1)}m back`;
       }
       if (countNode) countNode.textContent = `OF ${String(Math.max(players.length, ranking.length)).padStart(2, "0")}`;
       if (paceNode) paceNode.textContent = `${Math.round((localPlayer?.speed || 0) * 100)} SPD`;
       if (speedBar) speedBar.style.width = `${Math.min(100, (localPlayer?.speed || 0) / 1.4 * 100)}%`;
+      if (progressBar) {
+        progressBar.style.width = `${Math.min(100, Math.max(0, (localPlayer?.distance || 0) / (snapshot?.raceDistance || 200) * 100))}%`;
+      }
 
       mapRef.current?.querySelectorAll("[data-runner-id]").forEach((dot) => {
         const player = snapshotPlayers[dot.dataset.runnerId];
@@ -176,9 +180,9 @@ function HUD({
         dot.style.left = `${Math.min(100, Math.max(0, (player.distance || 0) / (snapshot?.raceDistance || 200) * 100))}%`;
         dot.dataset.holdsItem = String(Boolean(player.item));
       });
-      const leaderboard = leaderboardRef.current;
-      if (leaderboard) {
-        const rows = Array.from(leaderboard.querySelectorAll("[data-runner-id]"));
+      const packSheet = packSheetRef.current;
+      if (packSheet) {
+        const rows = Array.from(packSheet.querySelectorAll("[data-runner-id]"));
         rows.sort((a, b) => {
           const aPlayer = snapshotPlayers[a.dataset.runnerId];
           const bPlayer = snapshotPlayers[b.dataset.runnerId];
@@ -192,7 +196,7 @@ function HUD({
           if (rankNode) rankNode.textContent = String(index + 1).padStart(2, "0");
           if (speedNode) speedNode.textContent = player.id === me?.id ? "YOU" : `${Math.round((player.speed || 0) * 100)} SPD`;
           row.dataset.holdsItem = String(Boolean(player.item));
-          leaderboard.appendChild(row);
+          packSheet.appendChild(row);
         });
       }
       if (debugEnabled) {
@@ -255,10 +259,10 @@ function HUD({
       tapAnimationsRef.current[index]?.cancel();
       const offset = (Math.random() - 0.5) * 52;
       tapAnimationsRef.current[index] = popup.animate([
-        { opacity: 0, transform: `translate(calc(-50% + ${offset}px), 10px) scale(.65)` },
-        { opacity: 1, transform: `translate(calc(-50% + ${offset}px), -8px) scale(1)`, offset: 0.2 },
-        { opacity: 0, transform: `translate(calc(-50% + ${offset + 12}px), -54px) scale(1.05)` },
-      ], { duration: 480, easing: "ease-out" });
+        { opacity: 0, transform: `translate(calc(-50% + ${offset}px), 0) scale(.8)` },
+        { opacity: 1, transform: `translate(calc(-50% + ${offset}px), -12px) scale(1)`, offset: 0.2 },
+        { opacity: 0, transform: `translate(calc(-50% + ${offset + 12}px), -60px) scale(1.05)` },
+      ], { duration: 400, easing: "ease-out" });
     }
     if (!muted) playTone(190, 0.07, "square", true);
     if (navigator.vibrate) navigator.vibrate(12);
@@ -272,14 +276,20 @@ function HUD({
   }
 
   return (
-    <div className="game-hud" ref={hudRef} data-pack-open={String(showPack)}>
+    <div
+      className="game-hud"
+      ref={hudRef}
+      data-pack-open={String(showPack)}
+      data-countdown={String(countdown !== null)}
+      data-race-started={String(state?.state === "racing" && countdown === null)}
+    >
       <div className="race-stats">
         <div className="stat-panel position-panel"><span>PLACE</span><strong data-hud-position>{ordinal(position)}</strong><small data-hud-count>OF {String(Math.max(players.length, ordered.length)).padStart(2, "0")}</small></div>
         <div className="stat-panel distance-panel"><span>DISTANCE LEFT</span><strong><span data-hud-distance>{Math.ceil(distanceLeft)}</span><i> m</i></strong></div>
         <div className="stat-panel speed-panel"><span>SPEED</span><strong><span data-hud-pace>{Math.round(speed * 100)}</span></strong><div className="speed-track"><b data-hud-speed-bar style={{ width: `${Math.min(100, speed / 1.4 * 100)}%` }} /></div></div>
       </div>
-      <div className="race-map" aria-label="Race progress" ref={mapRef}>
-        <div className="race-map-track" />
+      <div className="race-progress-track" aria-label="Race progress" ref={mapRef}>
+        <div className="race-progress-fill" data-progress-fill />
         {(ordered.length ? ordered : players.map((player) => [player.id, player])).map(([id, player]) => (
           <span
             className={`race-map-dot ${id === me?.id ? "local" : ""}`}
@@ -294,12 +304,8 @@ function HUD({
         ))}
       </div>
       <button className="pack-pill" type="button" onClick={togglePack}>
-        <span>THE PACK</span><b data-pack-summary ref={packSummaryRef}>{ordinal(position)} · +0.0m ahead</b>
+        <b data-pack-summary ref={packSummaryRef}>{ordinal(position).toLowerCase()} - +0.0m ahead</b>
       </button>
-      <div className="leaderboard" ref={leaderboardRef}>
-        <div className="leaderboard-title"><span>THE PACK</span><i>LIVE</i></div>
-        {(ordered.length ? ordered : players.map((player) => [player.id, player])).slice(0, 5).map(([id, player], index) => <div className={`leader-row ${id === me?.id ? "is-you" : ""}`} key={id} data-runner-id={id}><b data-rank>{String(index + 1).padStart(2, "0")}</b><i style={{ background: player.color }} /><span>{player.name}</span><small data-runner-speed>{id === me?.id ? "YOU" : `${Math.round((player.speed || 0) * 100)} SPD`}</small></div>)}
-      </div>
       {debugEnabled && <aside className="race-debug-panel"><b>DEBUG</b><span data-debug-state>Heat waiting for race state</span><small>Boxes: {itemBoxes.map((box) => `${box.lane + 1}:${box.distance}m`).join(", ") || "not generated"}</small><small>Pads: {boostPads.map((pad) => `${pad.lane + 1}:${pad.distance}m`).join(", ") || "not generated"}</small><small>Odds: {JSON.stringify(debugConfig?.item_weights_last || "unavailable")}</small>{debugConfigError && <small>{debugConfigError}</small>}</aside>}
       {countdown !== null && <div className={`countdown-overlay ${countdown === "GO" ? "go" : ""}`}><div>{countdown}</div><span>{countdown === "GO" ? "MAKE YOUR MOVE" : "GET READY"}</span></div>}
       <div className="race-control-dock">
@@ -310,9 +316,9 @@ function HUD({
           <strong className="zone-badge" data-zone-badge hidden>IN THE ZONE!</strong>
           <strong className="heat-message" data-cooling-countdown />
         </div>
-        <button className="tap-button" data-tap-button onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="overheat-label" aria-hidden="true">COOLING...</span><strong>TAP!</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
+        <button className="tap-button" data-tap-button onPointerDown={tap} aria-label="Tap to accelerate" disabled={tapDisabled}><span className="tap-rings" /><span className="overheat-label" aria-hidden="true">COOLING...</span><strong className="tap-touch-label">TAP!</strong><span className="tap-hint">OR PRESS SPACE</span>{Array.from({ length: 6 }, (_, index) => <span className="tap-popup" aria-hidden="true" key={index} ref={(element) => { tapPopupsRef.current[index] = element; }}>+1</span>)}</button>
       </div>
-      {showPack && <div className="pack-sheet" aria-label="Race standings">{ordered.map(([id, player], index) => <div className={id === me?.id ? "is-you" : ""} key={id}><b>{index + 1}</b><span style={{ color: player.color }}>{player.name}</span><small>{Math.round(player.speed || 0)} SPD</small></div>)}</div>}
+      {showPack && <div className="pack-sheet" ref={packSheetRef} aria-label="Race standings">{ordered.map(([id, player], index) => <div className={id === me?.id ? "is-you" : ""} key={id} data-runner-id={id}><b data-rank>{index + 1}</b><span style={{ color: player.color }}>{player.name}</span><small data-runner-speed>{id === me?.id ? "YOU" : `${Math.round(player.speed || 0)} SPD`}</small></div>)}</div>}
       {showTutorial && <div className="heat-tutorial" role="status">Tap in a steady rhythm. Don’t mash!<span aria-hidden="true">↓</span></div>}
       <div className="game-bottom-hint"><span>✳</span> KEEP YOUR RHYTHM TO BUILD A BONUS <span className="desktop-hint">· SPACE TO TAP</span></div>
     </div>

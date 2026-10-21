@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { TRACK_WIDTH } from "./constants";
+import { LANE_WIDTH, TRACK_WIDTH } from "./constants";
+import { SCENE_SCALE } from "../sceneScale";
 import { getSceneQuality } from "../quality";
 import {
   addDistanceSigns,
@@ -69,7 +70,7 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
     for (let index = 0; index < 80; index += 1) {
       const z = -index * trackLength / 80;
       snowbanks.push({
-        position: [side * (TRACK_WIDTH / 2 + 1.65), 0.5, z],
+        position: [side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2), 0.5, z],
         scale: [1.7, 0.85 + index % 3 * 0.15, 3.8],
         color: index % 2 ? "#f9fdff" : "#e5f3f7",
       });
@@ -183,10 +184,10 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
   const ropePosts = [];
   for (const side of [-1, 1]) {
     for (let index = 0; index < 100; index += 1) {
-      ropePosts.push({ position: [side * (TRACK_WIDTH / 2 + 2.5), 0.55, -index * trackLength / 100] });
+      ropePosts.push({ position: [side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2), 0.55, -index * trackLength / 100] });
     }
     addMesh(root, new THREE.BoxGeometry(0.07, 0.06, trackLength), "#bc514c", [
-      side * (TRACK_WIDTH / 2 + 2.5), 0.75, -trackLength / 2,
+      side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2), 0.75, -trackLength / 2,
     ]);
   }
   addInstances(root, new THREE.CylinderGeometry(0.05, 0.07, 1.1, 5), "#94785f", ropePosts);
@@ -195,7 +196,7 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
   for (let index = 0; index < 92; index += 1) {
     const side = index % 2 ? 1 : -1;
     people.push({
-      x: side * (TRACK_WIDTH / 2 + 2 + index % 3 * 0.4),
+      x: side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2 + index % 3 * 0.4),
       y: 0.18,
       z: -Math.floor(index / 2) * trackLength / 46,
       scale: 0.8 + index % 3 * 0.08,
@@ -228,18 +229,12 @@ export function buildSnow(root, theme, trackLength, raceDistance) {
     attr.needsUpdate = true;
   });
 
-  addDistanceSigns(root, trackLength, { shape: "ice", pole: "#9cbec9", board: "#8ac8dc", ink: "#8ac8dc", text: "#f6fcff" });
-  const startArch = addThemeArch(root, theme, "snow", 0, "START");
+  addDistanceSigns(root, trackLength, { shape: "ice", pole: "#9cbec9", board: "#8ac8dc", ink: "#8ac8dc", text: "#f6fcff", clearance: SCENE_SCALE.propClearance });
   const finishArch = addThemeArch(root, theme, "snow", -raceDistance, "FINISH");
   return {
     finishArch,
     update(time, progress, raceTime, countdown) {
       updates.forEach((update) => update(time, progress));
-      startArch.userData.startLamps?.forEach(({ bulb, light, goLamp }, index) => {
-        const active = countdown === "GO" ? goLamp : typeof countdown === "number" && !goLamp && index < countdown;
-        bulb.material.emissiveIntensity = active ? 1.2 + Math.sin(time * 10) * 0.15 : 0.05;
-        if (light) light.intensity = active ? 0.8 : 0.02;
-      });
     },
   };
 }

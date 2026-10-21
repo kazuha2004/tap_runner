@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { TRACK_WIDTH } from "./constants";
+import { LANE_WIDTH, TRACK_WIDTH } from "./constants";
+import { SCENE_SCALE } from "../sceneScale";
 import {
   addDistanceSigns,
   addInstances,
@@ -68,7 +69,7 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
     const row = Math.floor(index / 2);
     const size = 0.45 + index % 4 * 0.16;
     dryBushes.push({
-      position: [side * (8.5 + index % 5 * 0.75), size * 0.55, -row * trackLength / 60],
+      position: [side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2 + index % 5 * 0.75), size * 0.55, -row * trackLength / 60],
       scale: [size * 1.6, size, size * 1.3],
       color: index % 2 ? "#a7824d" : "#bd995c",
     });
@@ -79,14 +80,14 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
   const fencePosts = [];
   for (const side of [-1, 1]) {
     for (let meters = 0; meters <= trackLength; meters += 8) {
-      fencePosts.push({ position: [side * (TRACK_WIDTH / 2 + 1.3), 0.65, -meters] });
+      fencePosts.push({ position: [side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2), 0.65, -meters] });
     }
     for (const y of [0.45, 1.05]) {
       addMesh(
         root,
         new THREE.BoxGeometry(0.16, 0.14, trackLength),
         "#b48a5b",
-        [side * (TRACK_WIDTH / 2 + 1.3), y, -trackLength / 2],
+        [side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2), y, -trackLength / 2],
       );
     }
   }
@@ -168,7 +169,7 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
     new THREE.BoxGeometry(7, 2.1, 12),
     material("#aa7a4d"),
   );
-  bleacher.position.set(TRACK_WIDTH / 2 + 4.5, 1.2, -trackLength + 8);
+  bleacher.position.set(TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 3, 1.2, -trackLength + 8);
   root.add(bleacher);
   const camelPositions = [];
   const camelBody = [];
@@ -176,7 +177,7 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
   const camelHeads = [];
   for (let index = 0; index < 5; index += 1) {
     const side = index % 2 ? 1 : -1;
-    const x = side * (TRACK_WIDTH / 2 + 4 + index % 2 * 1.8);
+    const x = side * (TRACK_WIDTH / 2 + SCENE_SCALE.cameraPropClearance + LANE_WIDTH / 2 + 2 + index % 2 * 1.8);
     const z = -trackLength + 5 + index * 1.8;
     camelBody.push({ position: [x, 1.1, z], scale: [1.35, 0.76, 0.72] });
     camelNeck.push({ position: [x + side * 0.85, 1.78, z], scale: [0.28, 1.5, 0.3], rotation: [0, 0, -side * 0.32] });
@@ -195,18 +196,12 @@ export function buildDesert(root, theme, trackLength, raceDistance) {
   const animateSpectators = createCrowd(root, camelPositions, ["#dc7655", "#397b9d", "#ecd092", "#73538c"]);
   updates.push((time, progress) => animateSpectators(time, progress > 0.8 ? 0.12 : 0.035));
 
-  addDistanceSigns(root, trackLength, { pole: "#9b7148", board: "#e5bd68", ink: "#ab684c", text: "#fff3ce" });
-  const startArch = addThemeArch(root, theme, "desert", 0, "START");
+  addDistanceSigns(root, trackLength, { pole: "#9b7148", board: "#e5bd68", ink: "#ab684c", text: "#fff3ce", clearance: SCENE_SCALE.propClearance });
   const finishArch = addThemeArch(root, theme, "desert", -raceDistance, "FINISH");
   return {
     finishArch,
     update(time, progress, raceTime, countdown) {
       updates.forEach((update) => update(time, progress));
-      startArch.userData.startLamps?.forEach(({ bulb, light, goLamp }, index) => {
-        const active = countdown === "GO" ? goLamp : typeof countdown === "number" && !goLamp && index < countdown;
-        bulb.material.emissiveIntensity = active ? 1.2 + Math.sin(time * 8) * 0.15 : 0.05;
-        if (light) light.intensity = active ? 0.8 : 0.02;
-      });
     },
   };
 }

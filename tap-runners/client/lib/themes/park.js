@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { TRACK_WIDTH } from "./constants";
+import { SCENE_SCALE } from "../sceneScale";
 import {
   addDistanceSigns,
   addInstances,
@@ -210,18 +211,12 @@ export function buildPark(root, theme, trackLength, raceDistance) {
   const updateCrowd = createCrowd(root, spectators, ["#ed7d85", "#73a7dd", "#f1bd57", "#9b78c4", "#71b68a"]);
   updates.push((time, progress) => updateCrowd(time, progress > 0.8 ? 0.13 : 0.035));
 
-  addDistanceSigns(root, trackLength, { shape: "round", pole: "#b98765", board: "#f3bc66", ink: "#f3bc66", text: "#fff9e9" });
-  const startArch = addThemeArch(root, theme, "park", 0, "START");
+  addDistanceSigns(root, trackLength, { shape: "round", pole: "#b98765", board: "#f3bc66", ink: "#f3bc66", text: "#fff9e9", clearance: SCENE_SCALE.propClearance });
   const finishArch = addThemeArch(root, theme, "park", -raceDistance, "FINISH");
   return {
     finishArch,
     update(time, progress, raceTime, countdown) {
       updates.forEach((update) => update(time, progress));
-      startArch.userData.startLamps?.forEach(({ bulb, light, goLamp }, index) => {
-        const active = countdown === "GO" ? goLamp : typeof countdown === "number" && !goLamp && index < countdown;
-        bulb.material.emissiveIntensity = active ? 1.2 + Math.sin(time * 9) * 0.2 : 0.05;
-        if (light) light.intensity = active ? 1 : 0.02;
-      });
     },
   };
 }

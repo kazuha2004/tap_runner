@@ -8,10 +8,50 @@ import Lobby from "../../../components/Lobby";
 import ExitDialog from "../../../components/ExitDialog";
 import ResultsPanel from "../../../components/ResultsPanel";
 import { GameSocket, getServerHttpUrl } from "../../../lib/socket";
-import { DEFAULT_THEME } from "../../../lib/themes";
+import { DEFAULT_THEME, getTheme } from "../../../lib/themes";
 import { playTone, playToneSequence } from "../../../lib/audio";
 
 const formatItemName = (item) => item.replaceAll("_", " ");
+const DEBUG_THEMES = {
+  stadium: "sunny-stadium",
+  candy: "candy-sunset",
+  desert: "desert-run",
+  snow: "snow-peak",
+};
+
+function makeFrozenRace(moment) {
+  const distanceByMoment = {
+    countdown: [0, 0, 0, 0],
+    start: [1, 1.5, 2, 2.5],
+    mid: [88, 94, 102, 110],
+    finish: [183, 188, 194, 198],
+  };
+  const ids = ["frozen-local", "frozen-blue", "frozen-gold", "frozen-purple"];
+  const lanes = [5, 1, 3, 7];
+  const distances = distanceByMoment[moment] || distanceByMoment.mid;
+  const players = Object.fromEntries(ids.map((id, index) => [id, {
+    id,
+    name: ["You", "River", "Sunny", "Milo"][index],
+    lane: lanes[index],
+    distance: distances[index],
+    speed: index === 0 ? 6.4 : 5.7 + index * 0.2,
+    heat: index === 0 ? 56 : 38 + index * 13,
+    zone: index === 0 ? "sweet" : index === 2 ? "hot" : "cold",
+    overheated: false,
+    item: index === 0 ? null : index === 2 ? "SHIELD" : null,
+    activeEffects: [],
+    finished: false,
+    finishPlace: null,
+  }]));
+  return {
+    state: moment === "countdown" ? "countdown" : "racing",
+    raceDistance: 200,
+    t: moment === "finish" ? 22 : moment === "mid" ? 10 : 0,
+    players,
+    ranking: [...ids].sort((left, right) => players[right].distance - players[left].distance),
+    rockets: [],
+  };
+}
 
 export default function RoomPage() {
   const { code: routeCode } = useParams();
@@ -19,6 +59,10 @@ export default function RoomPage() {
   const initialNameFromUrl = (searchParams.get("name") || "").trim();
   const router = useRouter();
   const code = String(routeCode || "").toUpperCase();
+  const themeOverride = DEBUG_THEMES[searchParams.get("theme")];
+  const freezeMode = ["countdown", "start", "mid", "finish"].includes(searchParams.get("freeze"))
+    ? searchParams.get("freeze")
+    : null;
   const [name, setName] = useState("");
   const [nameInput, setNameInput] = useState("");
   const [joined, setJoined] = useState(null);
@@ -186,6 +230,25 @@ export default function RoomPage() {
     if (message.type === "error") setError(message.msg);
   }, [showToast]);
   const debugEnabled = searchParams.get("debug") === "1";
+
+  useEffect(() => {
+    if (themeOverride) setSelectedTheme(themeOverride);
+    if (!freezeMode) return;
+    const frozenState = makeFrozenRace(freezeMode);
+    const frozenLocal = frozenState.players["frozen-local"];
+    const frozenPlayers = Object.values(frozenState.players);
+    const localPlayer = { ...frozenLocal };
+    setJoined(localPlayer);
+    setName(localPlayer.name);
+    setPlayers(frozenPlayers);
+    setHost(localPlayer.id);
+    setRaceDistance(200);
+    setConnection("connected");
+    setGameState(frozenState);
+    latestGameStateRef.current = frozenState;
+    setCountdown(freezeMode === "countdown" ? 3 : null);
+    setResults(null);
+  }, [freezeMode, themeOverride]);
 
   useEffect(() => {
     if (!debugEnabled) return undefined;
@@ -415,7 +478,10 @@ export default function RoomPage() {
 
   const showRaceView = isRacing || countdownActive || isFinished;
   return (
-    <main className={`room-page ${!showRaceView ? "in-lobby" : ""} ${isRacing ? "racing" : ""} ${leaving ? "leaving-room" : ""}`}>
+    <main
+      className={`room-page ${!showRaceView ? "in-lobby" : ""} ${showRaceView ? "racing" : ""} ${leaving ? "leaving-room" : ""}`}
+      style={{ "--race-accent": getTheme(selectedTheme).accentColor }}
+    >
       <header className="room-topbar">
         <button className="room-exit-button" onClick={openExit} aria-label="Leave room">×</button>
         <a className="brand" href="/">↗ TAP<span>RUNNERS</span></a>
@@ -444,7 +510,17 @@ export default function RoomPage() {
             onStart={() => send("start")}
             onCopy={() => navigator.clipboard.writeText(`${window.location.origin}/room/${code}`)}
           />
-          <GameCanvas state={null} me={joined} muted={muted} countdown={null} theme={selectedTheme} raceDistance={raceDistance} previewOnly />
+          <GameCanvas
+            state={null}
+            me={joined}
+            muted={muted}
+            countdown={null}
+            theme={selectedTheme}
+            raceDistance={raceDistance}
+            previewOnly
+            previewPlayers={players}
+            previewPaused={exitOpen}
+          />
         </>
       ) : (
         <>

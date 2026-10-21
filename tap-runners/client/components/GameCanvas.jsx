@@ -14,7 +14,7 @@ import { getTheme } from "../lib/themes";
 import { detectQualityPreset, QUALITY, setSceneQuality } from "../lib/quality";
 import { playTone, playToneSequence } from "../lib/audio";
 
-function makeNameLabel(name, color) {
+function makeNameLabel(name, color, isLocal) {
   const canvas = document.createElement("canvas");
   canvas.width = 320;
   canvas.height = 88;
@@ -32,14 +32,19 @@ function makeNameLabel(name, color) {
   context.font = "700 29px Arial";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(name, 160, 45, 272);
+  let displayName = isLocal ? "YOU" : name;
+  while (displayName.length > 1 && context.measureText(displayName).width > 272) {
+    displayName = `${displayName.slice(0, -2)}…`;
+  }
+  context.fillText(displayName, 160, 45, 272);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const label = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }),
   );
-  label.scale.set(2.15, 0.6, 1);
+  label.scale.set(isLocal ? 1 : 2.15, isLocal ? 0.42 : 0.6, 1);
+  label.userData.isLocal = isLocal;
   return label;
 }
 
@@ -100,6 +105,18 @@ function makeRunnerStatusLabel() {
   return sprite;
 }
 
+const RUNNER_PALETTES = {
+  "sunny-stadium": ["#22a9d2", "#ffc83d", "#8055c7", "#22a785", "#e55087", "#4174d4", "#d64b68", "#536cce"],
+  "candy-sunset": ["#2278c4", "#39a96b", "#f2bb39", "#7149ba", "#24a2b9", "#d84f80", "#5267cc", "#6d8c3d"],
+  "desert-run": ["#168eb8", "#704fbd", "#2772c6", "#278d73", "#d34e7b", "#445fbd", "#1d9ba1", "#7952a5"],
+  "snow-peak": ["#dd6848", "#dbad33", "#8055c7", "#28a58c", "#d94b78", "#397bc5", "#ad6937", "#4569ae"],
+};
+
+function runnerColorForTheme(themeId, lane) {
+  const colors = RUNNER_PALETTES[themeId] || RUNNER_PALETTES["sunny-stadium"];
+  return colors[Math.max(0, Math.min(colors.length - 1, lane))];
+}
+
 export default function GameCanvas({
   state,
   me,
@@ -108,6 +125,8 @@ export default function GameCanvas({
   theme = "sunny-stadium",
   raceDistance = 200,
   previewOnly = false,
+  previewPlayers = [],
+  previewPaused = false,
   slowMotion = false,
   resultsOpen = false,
   stateSnapshotRef,
@@ -122,6 +141,9 @@ export default function GameCanvas({
   const themeRef = useRef(theme);
   const countdownRef = useRef(countdown);
   const raceDistanceRef = useRef(raceDistance);
+  const previewPlayersRef = useRef({});
+  const previewPausedRef = useRef(previewPaused);
+  const resumeAnimationRef = useRef(null);
   const finishRef = useRef(false);
   const slowMotionRef = useRef(slowMotion);
   const reducedMotionRef = useRef(false);
@@ -140,12 +162,43 @@ export default function GameCanvas({
   themeRef.current = theme;
   countdownRef.current = countdown;
   raceDistanceRef.current = raceDistance;
+  previewPlayersRef.current = Object.fromEntries(
+    previewPlayers.slice(0, LANE_COUNT).map((player, index) => [
+      player.id,
+      {
+        ...player,
+        lane: Number.isFinite(player.lane) ? player.lane : index,
+        distance: 0,
+        speed: 1.25,
+        activeEffects: [],
+      },
+    ]),
+  );
+  previewPausedRef.current = previewPaused;
   slowMotionRef.current = slowMotion;
   resultsOpenRef.current = resultsOpen;
   itemBoxesRef.current = itemBoxes;
   boostPadsRef.current = boostPads;
   itemEventsRef.current = itemEvents;
   showStatsRef.current = showStats;
+
+  useEffect(() => {
+    if (previewOnly && !previewPaused) resumeAnimationRef.current?.();
+  }, [previewOnly, previewPaused]);
+
+  const previousPreviewThemeRef = useRef(theme);
+  useEffect(() => {
+    if (!previewOnly || previousPreviewThemeRef.current === theme) return;
+    previousPreviewThemeRef.current = theme;
+    const mount = mountRef.current;
+    if (!mount) return;
+    mount.style.setProperty("--preview-fade-color", getTheme(theme).fog);
+    mount.classList.remove("theme-crossfade");
+    void mount.offsetWidth;
+    mount.classList.add("theme-crossfade");
+    const timer = setTimeout(() => mount.classList.remove("theme-crossfade"), 220);
+    return () => clearTimeout(timer);
+  }, [previewOnly, theme]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -174,10 +227,11 @@ export default function GameCanvas({
       activeTheme.fogFar * initialQuality.fogScale,
     );
 
-    const camera = new THREE.PerspectiveCamera(49, 1, 0.1, initialQuality.cameraFar);
+    const camera = new THREE.PerspectiveCamera(68, 1, 0.1, initialQuality.cameraFar);
     camera.position.set(0, 10, 25);
     camera.lookAt(0, 1, -25);
     const desiredCameraPosition = new THREE.Vector3();
+    const labelWorldPosition = new THREE.Vector3();
 
     try {
       renderer = new THREE.WebGLRenderer({
@@ -195,7 +249,7 @@ export default function GameCanvas({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, initialQuality.pixelRatio));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.28;
+    renderer.toneMappingExposure = activeTheme.exposure;
     renderer.shadowMap.enabled = initialQuality.shadows;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate = qualityRef.current === "HIGH";
@@ -222,7 +276,7 @@ export default function GameCanvas({
     sunlight.shadow.bias = -0.0003;
     scene.add(sunlight);
 
-    const fillLight = new THREE.DirectionalLight(activeTheme.hemiSky, 0.72);
+    const fillLight = new THREE.DirectionalLight(activeTheme.hemiSky, activeTheme.fillIntensity);
     fillLight.position.set(70, 48, -120);
     if (qualityRef.current === "HIGH") scene.add(fillLight);
 
@@ -303,6 +357,7 @@ export default function GameCanvas({
       trail: new THREE.BoxGeometry(0.16, 0.12, 1.6),
       shield: new THREE.SphereGeometry(1, qualityRef.current === "HIGH" ? 16 : 10, qualityRef.current === "HIGH" ? 12 : 8),
       puddle: new THREE.CylinderGeometry(1, 1, 0.045, qualityRef.current === "HIGH" ? 16 : 10),
+      shadow: new THREE.CylinderGeometry(1, 1, 0.02, qualityRef.current === "HIGH" ? 20 : 12),
     };
     function mergeParts(parts) {
       const geometries = parts.map(([geometry, x, y, z]) => {
@@ -348,6 +403,16 @@ export default function GameCanvas({
       depthWrite: false,
     });
     const puddleMaterial = runnerMaterial("#8cae88");
+    const outlineMaterial = new THREE.MeshBasicMaterial({
+      color: "#1b2a49",
+      side: THREE.BackSide,
+    });
+    const runnerShadowMaterial = new THREE.MeshBasicMaterial({
+      color: "#1b2a49",
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+    });
     const rocketMaterial = qualityRef.current === "HIGH"
       ? new THREE.MeshStandardMaterial({ color: "#e34e45", roughness: 0.38, metalness: 0.18 })
       : new THREE.MeshLambertMaterial({ color: "#e34e45" });
@@ -442,7 +507,9 @@ export default function GameCanvas({
 
     function buildRunner(id, data) {
       const group = new THREE.Group();
-      const color = data.color || "#e94767";
+      group.scale.setScalar(1.25);
+      const lane = Number.isFinite(data.lane) ? data.lane : 0;
+      const color = runnerColorForTheme(themeRef.current, lane);
       if (!suitMaterials.has(color)) suitMaterials.set(color, runnerMaterial(color));
       if (!trailMaterials.has(color)) {
         trailMaterials.set(color, new THREE.MeshBasicMaterial({
@@ -453,12 +520,26 @@ export default function GameCanvas({
       }
       const suitMaterial = suitMaterials.get(color);
 
+      const shadow = new THREE.Mesh(sharedRunnerGeometries.shadow, runnerShadowMaterial);
+      shadow.position.y = 0.018;
+      shadow.scale.set(0.34, 1, 0.46);
+      shadow.renderOrder = 1;
+      group.add(shadow);
+
+      const bodyOutline = new THREE.Mesh(sharedRunnerGeometries.body, outlineMaterial);
+      bodyOutline.position.y = 0.55;
+      bodyOutline.scale.setScalar(1.11);
+      group.add(bodyOutline);
       const body = new THREE.Mesh(sharedRunnerGeometries.body, suitMaterial);
       body.position.y = 0.55;
       body.castShadow = true;
       group.add(body);
 
       const faceMaterial = runnerMaterial("#f2bd91", 0.8);
+      const headOutline = new THREE.Mesh(sharedRunnerGeometries.head, outlineMaterial);
+      headOutline.position.set(0, 1.03, 0);
+      headOutline.scale.setScalar(1.12);
+      group.add(headOutline);
       const head = new THREE.Mesh(sharedRunnerGeometries.head, faceMaterial);
       head.position.set(0, 1.03, 0);
       head.castShadow = true;
@@ -546,7 +627,7 @@ export default function GameCanvas({
       slowPuddle.visible = false;
       group.add(slowPuddle);
 
-      const nameLabel = makeNameLabel(data.name || "Runner", data.color || "#e94767");
+      const nameLabel = makeNameLabel(data.name || "Runner", color, id === meRef.current?.id);
       if (nameLabel) {
         nameLabel.position.y = 1.55;
         group.add(nameLabel);
@@ -579,6 +660,7 @@ export default function GameCanvas({
         shieldPattern,
         slowPuddle,
         statusLabel,
+        nameLabel,
         trail,
         arms,
         legs,
@@ -635,13 +717,15 @@ export default function GameCanvas({
     resize();
 
     const animate = () => {
-      if (document.visibilityState === "hidden") {
+      if (document.visibilityState === "hidden" || (previewOnly && previewPausedRef.current)) {
         frameId = 0;
         return;
       }
       frameId = requestAnimationFrame(animate);
       const nowMs = performance.now();
-      const requestedFps = resultsOpenRef.current ? 15 : QUALITY[qualityRef.current].targetFps;
+      const requestedFps = previewOnly
+        ? 30
+        : resultsOpenRef.current ? 15 : QUALITY[qualityRef.current].targetFps;
       const frameInterval = 1000 / requestedFps;
       if (nowMs - lastRenderAt < frameInterval) return;
       const delta = Math.min(0.05, Math.max(0, (nowMs - previousFrameTime) / 1000));
@@ -680,7 +764,7 @@ export default function GameCanvas({
           }
         }
       }
-      const currentPlayers = currentState?.players || {};
+      const currentPlayers = currentState?.players || (previewOnly ? previewPlayersRef.current : {});
       const currentRaceDistance = currentState?.raceDistance || raceDistanceRef.current;
       if (itemBoxesRef.current !== activeItemBoxes) {
         activeItemBoxes = itemBoxesRef.current;
@@ -713,7 +797,9 @@ export default function GameCanvas({
         sunlight.color.set(nextTheme.keyLight);
         sunlight.position.set(...nextTheme.sunDirection);
         sunlight.intensity = nextTheme.sunIntensity;
+        renderer.toneMappingExposure = nextTheme.exposure;
         fillLight.color.set(nextTheme.hemiSky);
+        fillLight.intensity = nextTheme.fillIntensity;
         fillLight.position.set(-nextTheme.sunDirection[0], 48, -nextTheme.sunDirection[2]);
         world = createTrackWorld(
           activeThemeId,
@@ -831,6 +917,14 @@ export default function GameCanvas({
           runner.magnetGeometry.attributes.position.needsUpdate = true;
         }
         runner.group.position.set(x, 0.035, z);
+        if (runner.nameLabel) {
+          const localDistance = currentPlayers[meRef.current?.id]?.distance || 0;
+          const labelOpacity = isLocal
+            ? 1
+            : Math.max(0, 1 - Math.max(0, Math.abs(runner.distance - localDistance) - 18) / 7);
+          runner.nameLabel.material.opacity = labelOpacity;
+          runner.nameLabel.visible = labelOpacity > 0;
+        }
         if (runner.recoilUntil > animationTime) {
           runner.group.position.z += Math.sin(
             ((runner.recoilUntil - animationTime) / 0.18) * Math.PI,
@@ -1028,17 +1122,17 @@ export default function GameCanvas({
       cullTrackWorld(world, camera, sceneFrame);
       if (qualityRef.current === "MEDIUM" && sceneFrame % 4 === 0) renderer.shadowMap.needsUpdate = true;
 
-      const local = runners.get(meRef.current?.id);
+      const local = previewOnly ? null : runners.get(meRef.current?.id);
       if (local) {
         const runnerX = (local.lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH;
         const runnerZ = -local.distance;
         const portrait = mount.clientWidth < mount.clientHeight;
         desiredCameraPosition.set(
-          runnerX * 0.38,
-          portrait ? 4.8 : 8.2,
-          runnerZ + (portrait ? 9 : 18),
+          portrait ? runnerX : runnerX * 0.38,
+          portrait ? 3 : 8.2,
+          runnerZ + (portrait ? 6.5 : 18),
         );
-        camera.position.lerp(desiredCameraPosition, 0.065);
+        camera.position.lerp(desiredCameraPosition, portrait ? 0.18 : 0.065);
         if (animationTime < cameraShakeUntil) {
           camera.position.x += Math.sin(nowMs * 0.07) * 0.08;
           camera.position.y += Math.cos(nowMs * 0.09) * 0.04;
@@ -1046,9 +1140,9 @@ export default function GameCanvas({
         const speedFov = portrait
           ? Math.min(8, Math.max(0, local.speed * 0.5))
           : Math.min(8, Math.max(0, local.speed * 0.23));
-        camera.fov += ((portrait ? 68 : 49) + speedFov - camera.fov) * 0.12;
+        camera.fov += ((portrait ? 67 : 49) + speedFov - camera.fov) * 0.12;
         camera.updateProjectionMatrix();
-        camera.lookAt(runnerX * 0.25, 0.9, runnerZ - (portrait ? 8 : 30));
+        camera.lookAt(portrait ? camera.position.x : runnerX * 0.25, portrait ? 0.6 : 0.9, runnerZ - (portrait ? 8.5 : 30));
       } else if (previewOnly) {
         const drift = now * 0.075;
         if (!reducedMotionRef.current) {
@@ -1067,6 +1161,34 @@ export default function GameCanvas({
         camera.lookAt(0, 1, -30);
       }
 
+      if (!previewOnly && mount.clientWidth < 768 && mount.clientHeight > mount.clientWidth) {
+        const width = Math.max(1, mount.clientWidth);
+        const height = Math.max(1, mount.clientHeight);
+        camera.updateMatrixWorld();
+        for (const runner of runners.values()) {
+          const label = runner.nameLabel;
+          if (!label?.visible) continue;
+          label.position.x = 0;
+          label.position.y = 1.55;
+          label.getWorldPosition(labelWorldPosition);
+          const labelDistance = Math.max(0.1, camera.position.distanceTo(labelWorldPosition));
+          const verticalView = 2 * labelDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+          const horizontalView = verticalView * camera.aspect;
+          const maxWidth = label.userData.isLocal ? 1 : 2.15;
+          const maxHeight = label.userData.isLocal ? 0.42 : 0.6;
+          label.scale.x = Math.min(maxWidth, horizontalView * (label.userData.isLocal ? 0.22 : 0.4) / runner.group.scale.x)
+            / runner.group.scale.x;
+          label.scale.y = maxHeight * label.scale.x / maxWidth / runner.group.scale.y;
+          const maxNdcX = Math.max(0, 1 - 16 / width - label.scale.x * runner.group.scale.x / horizontalView);
+          const maxNdcY = Math.max(0, 1 - 16 / height - label.scale.y * runner.group.scale.y / verticalView);
+          labelWorldPosition.project(camera);
+          const boundedX = Math.max(-maxNdcX, Math.min(maxNdcX, labelWorldPosition.x));
+          const boundedY = Math.max(-maxNdcY, Math.min(maxNdcY, labelWorldPosition.y));
+          label.position.x -= (boundedX - labelWorldPosition.x) * horizontalView / 2 / runner.group.scale.x;
+          label.position.y += (boundedY - labelWorldPosition.y) * verticalView / 2 / runner.group.scale.y;
+        }
+      }
+
       if (currentState?.state === "finished" && !finishSoundPlayed) {
         finishSoundPlayed = true;
         if (!mutedRef.current) {
@@ -1080,9 +1202,9 @@ export default function GameCanvas({
       }
       if (countdownRef.current === 3) finishSoundPlayed = false;
       renderer.render(scene, camera);
-      if (!resultsOpenRef.current) qualityWindowFrames += 1;
+      if (!resultsOpenRef.current && !previewOnly) qualityWindowFrames += 1;
       statsWindowFrames += 1;
-      if (resultsOpenRef.current) {
+      if (resultsOpenRef.current || previewOnly) {
         qualityWindowStart = nowMs;
         qualityWindowFrames = 0;
       } else if (nowMs - qualityWindowStart >= 2000) {
@@ -1115,6 +1237,12 @@ export default function GameCanvas({
       lastRenderAt = previousFrameTime;
       frameId = requestAnimationFrame(animate);
     };
+    resumeAnimationRef.current = () => {
+      if (frameId || document.visibilityState === "hidden" || previewPausedRef.current) return;
+      previousFrameTime = performance.now();
+      lastRenderAt = previousFrameTime;
+      frameId = requestAnimationFrame(animate);
+    };
     document.addEventListener("visibilitychange", onVisibilityChange);
     frameId = requestAnimationFrame(animate);
 
@@ -1126,6 +1254,7 @@ export default function GameCanvas({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("pointerdown", onCanvasPointerDown);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      resumeAnimationRef.current = null;
       disposeTrackWorld(world);
       scene.traverse((object) => {
         object.geometry?.dispose();

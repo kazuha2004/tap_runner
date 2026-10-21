@@ -3,12 +3,19 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { getTheme } from "./themes";
 import { TRACK_LENGTH, LANE_COUNT, LANE_WIDTH, TRACK_WIDTH } from "./themes/constants";
-import { addLaneMarkings, clearThemeMaterialCache, material, makeSignTexture } from "./themes/shared";
+import {
+  addLaneMarkings,
+  addStartGantry,
+  clearThemeMaterialCache,
+  material,
+  makeSignTexture,
+} from "./themes/shared";
 import { buildStadium } from "./themes/stadium";
 import { buildPark } from "./themes/park";
 import { buildDesert } from "./themes/desert";
 import { buildSnow } from "./themes/snow";
 import { getSceneQuality } from "./quality";
+import { SCENE_SCALE } from "./sceneScale";
 
 export { TRACK_LENGTH, LANE_COUNT, LANE_WIDTH, TRACK_WIDTH };
 
@@ -156,7 +163,7 @@ function addCourseSurface(root, theme, trackLength) {
   const markerCount = trackLength / markerSpacing - 1;
   const markers = new THREE.InstancedMesh(
     new THREE.BoxGeometry(TRACK_WIDTH - 0.12, 0.026, 0.12),
-    material("#fff8e9"),
+    material(theme.laneLineColor),
     markerCount,
   );
   for (let index = 0; index < markerCount; index += 1) {
@@ -170,36 +177,57 @@ function addCourseSurface(root, theme, trackLength) {
 
   const startLine = new THREE.Mesh(
     new THREE.BoxGeometry(TRACK_WIDTH + 0.2, 0.03, 0.38),
-    material("#fffdf5"),
+    material(theme.laneLineColor),
   );
   startLine.position.y = 0.03;
   root.add(startLine);
 
+  const wedgeShape = new THREE.Shape();
+  wedgeShape.moveTo(0, 0);
+  wedgeShape.lineTo(0.2, 0);
+  wedgeShape.lineTo(0.2, SCENE_SCALE.startingBlockHeight);
+  wedgeShape.lineTo(0, 0.025);
+  wedgeShape.closePath();
   const blocks = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.76, 0.12, 1.1),
-    material("#66828b"),
-    LANE_COUNT,
+    new THREE.ExtrudeGeometry(wedgeShape, {
+      depth: SCENE_SCALE.startingBlockLength,
+      bevelEnabled: false,
+    }),
+    material("#283443"),
+    LANE_COUNT * 2,
   );
+  blocks.name = "race-starting-blocks";
+  blocks.userData.startArea = true;
+  let blockIndex = 0;
   for (let lane = 0; lane < LANE_COUNT; lane += 1) {
-    const transform = new THREE.Object3D();
-    transform.position.set((lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH, 0.08, 1.65);
-    transform.updateMatrix();
-    blocks.setMatrixAt(lane, transform.matrix);
+    for (const side of [-1, 1]) {
+      const transform = new THREE.Object3D();
+      transform.position.set(
+        (lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH + side * 0.17 - 0.1,
+        0.005,
+        1.65,
+      );
+      transform.updateMatrix();
+      blocks.setMatrixAt(blockIndex, transform.matrix);
+      blockIndex += 1;
+    }
   }
   blocks.instanceMatrix.needsUpdate = true;
   root.add(blocks);
 
   for (let lane = 0; lane < LANE_COUNT; lane += 1) {
-    const texture = makeSignTexture(String(lane + 1), "#fff9ed", "#70564a", 128, 128);
+    const texture = makeSignTexture(String(lane + 1), "#fffdf5", "#1b2a49", 128, 128);
     if (!texture) continue;
     const number = new THREE.Mesh(
       new THREE.PlaneGeometry(0.4, 0.4),
       new THREE.MeshToonMaterial({ map: texture, side: THREE.DoubleSide }),
     );
     number.rotation.x = -Math.PI / 2;
-    number.position.set((lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH, 0.045, 3.1);
+    number.position.set((lane - (LANE_COUNT - 1) / 2) * LANE_WIDTH, 0.012, 3.1);
+    number.userData.startArea = true;
     root.add(number);
   }
+  return blocks;
 }
 
 function addItemBoxes(root, theme, boxes) {
@@ -235,7 +263,7 @@ function addItemBoxes(root, theme, boxes) {
   root.add(mesh);
   const halo = new THREE.InstancedMesh(
     new THREE.TorusGeometry(0.62, 0.035, 5, 16),
-    new THREE.MeshBasicMaterial({ color: theme.trackAccent, transparent: true, opacity: 0.85 }),
+    new THREE.MeshBasicMaterial({ color: "#f0b53f", transparent: true, opacity: 0.85 }),
     boxes.length,
   );
   halo.name = "race-item-box-rings";
@@ -277,7 +305,7 @@ function addBoostPads(root, theme, pads) {
   const geometry = new THREE.ShapeGeometry(shape);
   const mesh = new THREE.InstancedMesh(
     geometry,
-    new THREE.MeshBasicMaterial({ color: theme.trackAccent, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color: "#55c6df", side: THREE.DoubleSide }),
     pads.length,
   );
   mesh.name = "race-boost-pads";
@@ -303,9 +331,10 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [],
   const root = new THREE.Group();
   root.name = `race-world-${theme.environment}`;
   root.add(createSky(theme, initialDistance), createSun(theme));
-  addCourseSurface(root, theme, initialDistance);
+  const startingBlocks = addCourseSurface(root, theme, initialDistance);
   const builder = BUILDERS[theme.environment];
   const environment = builder(root, theme, initialDistance, initialDistance);
+  const startGantry = addStartGantry(root, theme);
   mergeStaticMeshes(root);
   let itemBoxSystem = addItemBoxes(root, theme, itemBoxes);
   let boostPadSystem = addBoostPads(root, theme, boostPads);
@@ -365,6 +394,37 @@ export function createTrackWorld(themeId, initialDistance = 400, itemBoxes = [],
     },
     update({ time, countdown, raceDistance, progress = 0, raceTime = 0 }) {
       if (environment.finishArch) environment.finishArch.position.z = -raceDistance;
+      startingBlocks.visible = typeof countdown === "number"
+        || (countdown === "GO" && raceTime < SCENE_SCALE.startingBlocksHideSeconds);
+      if (!startGantry.userData.removed) {
+        const countdownActive = typeof countdown === "number";
+        startGantry.children.forEach((child, index) => {
+          if (index < 3) return;
+          child.visible = countdownActive;
+          if (!countdownActive) return;
+          const lampIndex = index - 3;
+          const active = countdown === "GO"
+            || lampIndex < 4 - countdown;
+          startGantry.userData.lampMaterials[lampIndex].color.set(
+            active ? (countdown === "GO" || lampIndex === 3 ? "#63c98a" : "#ed766f") : "#c8d3d8",
+          );
+        });
+        if (countdown === "GO" && startGantry.userData.fadeStartedAt === null) {
+          startGantry.userData.fadeStartedAt = time;
+        }
+        if (startGantry.userData.fadeStartedAt !== null) {
+          const fade = Math.min(
+            1,
+            (time - startGantry.userData.fadeStartedAt) / SCENE_SCALE.gantryFadeSeconds,
+          );
+          startGantry.position.y = SCENE_SCALE.gantryHeight * fade;
+          startGantry.userData.frameMaterial.opacity = 1 - fade;
+          startGantry.userData.lampMaterials.forEach((lampMaterial) => {
+            lampMaterial.opacity = 1 - fade;
+          });
+          if (fade >= 1) startGantry.userData.dispose();
+        }
+      }
       if (itemBoxSystem) {
         for (let index = 0; index < itemBoxSystem.boxes.length; index += 1) {
           const fadedAt = itemBoxSystem.fadedAt[index];

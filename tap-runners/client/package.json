@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
     "next": "^16.4.0",
@@ -13,5 +14,7 @@
     "react-dom": "^19.2.0",
     "three": "^0.169.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
 }
